@@ -3,3 +3,4 @@ Thumbs.db
 *.zip
 .netlify/
 node_modules/
+.claude/

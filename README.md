@@ -29,6 +29,14 @@ Para activarla en Chrome 154–156:
 2. Ponla en **Enabled**
 3. Reinicia Chrome
 
+Mientras Chrome estable siga en 153, la forma de probarlo es instalar **Chrome
+Beta** (154) o **Chrome Dev** (155) desde Play Store. Son aplicaciones aparte,
+conviven con el Chrome normal. Brave y otros Chromium de terceros van por
+detrás de Chrome, así que tardarán más en traer la API.
+
+La propia app te dice en qué versión de Chromium estás y qué te falta: en la
+pantalla inicial hay una línea de diagnóstico.
+
 Además el teléfono tiene que ser **anfitrión USB (OTG)** y el cable tiene que
 llevar datos, no sólo corriente.
 

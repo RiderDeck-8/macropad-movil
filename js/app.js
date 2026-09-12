@@ -90,18 +90,14 @@ function checkSupport() {
     note.className = 'note bad';
     note.innerHTML =
       'Esta pagina debe abrirse por <b>HTTPS</b> (o desde localhost). ' +
-      'Sin conexion segura el navegador bloquea el acceso al teclado.';
+      'Sin conexion segura el navegador bloquea el acceso al teclado.' + diagnostics();
     $('connectBtn').disabled = true;
     return false;
   }
   if (!HID.hidSupported()) {
     note.className = 'note bad';
     note.innerHTML =
-      '<b>Este navegador no expone WebHID.</b><br><br>' +
-      'En Android necesitas Chrome 154 o superior y activar la bandera: ' +
-      'abre <code>chrome://flags/#enable-web-hid</code>, ponla en <b>Enabled</b> ' +
-      'y reinicia Chrome. Desde Chrome 157 viene activada de serie.<br><br>' +
-      'En PC funciona ya en Chrome, Edge y Opera.';
+      '<b>Este navegador no expone WebHID.</b><br><br>' + advice() + diagnostics();
     $('connectBtn').disabled = true;
     return false;
   }
@@ -109,8 +105,60 @@ function checkSupport() {
   note.innerHTML =
     'WebHID disponible. Conecta el teclado por USB-C (OTG) y pulsa Conectar. ' +
     'Si la lista sale vacia, revisa que el cable transmita datos y que el ' +
-    'telefono tenga el modo anfitrion USB activo.';
+    'telefono tenga el modo anfitrion USB activo.' + diagnostics();
   return true;
+}
+
+/** Version de Chromium sobre la que corre el navegador, sea cual sea la marca. */
+function engine() {
+  const ua = navigator.userAgent;
+  let version = 0;
+  const brands = (navigator.userAgentData && navigator.userAgentData.brands) || [];
+  for (const b of brands) {
+    if (/Chromium|Google Chrome/i.test(b.brand)) {
+      version = Math.max(version, parseInt(b.version, 10) || 0);
+    }
+  }
+  if (!version) {
+    const m = ua.match(/Chrom(?:e|ium)\/(\d+)/);
+    version = m ? Number(m[1]) : 0;
+  }
+  return {
+    version,
+    android: /Android/i.test(ua),
+    scheme: /Edg\//.test(ua) ? 'edge' : /OPR\//.test(ua) ? 'opera' : 'chrome',
+  };
+}
+
+/** El primer paso concreto que le toca a este navegador en concreto. */
+function advice() {
+  const { version, android } = engine();
+  if (!android) {
+    return 'En ordenador funciona con Chrome, Edge u Opera. Firefox y Safari ' +
+      'no implementan WebHID.';
+  }
+  if (version >= 154) {
+    return `Tu navegador va sobre Chromium ${version}, que ya incluye WebHID, ` +
+      'pero viene apagado. Abre <code>chrome://flags/#enable-web-hid</code> ' +
+      '(en Brave, <code>brave://flags/#enable-web-hid</code>), ponlo en ' +
+      '<b>Enabled</b> y reinicia el navegador.<br><br>' +
+      'Si la bandera no aparece, ese navegador todavia no la trae: prueba con ' +
+      'Chrome. Desde Chromium 157 viene activada de serie.';
+  }
+  return `Tu navegador va sobre Chromium ${version || 'desconocido'}, y WebHID ` +
+    'no llega a Android hasta Chromium <b>154</b>.<br><br>' +
+    'Para probarlo hoy, instala <b>Chrome Beta</b> o <b>Chrome Dev</b> desde ' +
+    'Play Store, activa <code>chrome://flags/#enable-web-hid</code> y reinicia. ' +
+    'Conviven con tu navegador normal. Si prefieres esperar, Chrome 157 lo ' +
+    'trae activado sin tocar nada.';
+}
+
+function diagnostics() {
+  const { version, android } = engine();
+  const yes = (b) => (b ? 'si' : 'no');
+  return '<br><br><span class="diag">Diagnostico: Chromium ' +
+    `${version || '?'} · Android ${yes(android)} · HTTPS ${yes(window.isSecureContext)} ` +
+    `· navigator.hid ${yes('hid' in navigator)}</span>`;
 }
 
 // -------------------------------------------------------------------- conexion
