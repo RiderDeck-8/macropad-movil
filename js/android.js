@@ -173,29 +173,10 @@ async function probe(device, onStep) {
 }
 
 /**
- * Escucha sin escribir nada mientras el usuario pulsa teclas, y lee los
- * descriptores. Es la prueba que separa "nuestras lecturas no funcionan" de
- * "el teclado no contesta a lo que le mandamos".
+ * Informe completo: descriptores sobre una conexion limpia y despues los
+ * intentos de dialogo con la interfaz propietaria. No toca las interfaces del
+ * teclado, porque apartarlas a la fuerza puede tumbar la conexion entera.
  */
-export function listenTest(msPerInterface = 2000) {
-  const devices = listDevices();
-  if (!devices.length) return { error: 'Android no ve ningun dispositivo USB HID' };
-  const device = devices[0];
-  if (!device.hasPermission) {
-    window.AndroidHid.requestPermission(device.id);
-    return { error: 'falta aceptar el permiso USB; repite la prueba' };
-  }
-  const parse = (text) => {
-    try { return JSON.parse(text); } catch (e) { return { error: e.message }; }
-  };
-  return {
-    device,
-    listen: parse(window.AndroidHid.listen(device.id, msPerInterface)),
-    descriptors: parse(window.AndroidHid.descriptors(device.id)),
-  };
-}
-
-/** Vuelca lo que contesta cada interfaz, para cuando el sondeo no acierta. */
 export function diagnose() {
   const devices = listDevices();
   if (!devices.length) return { error: 'Android no ve ningun dispositivo USB HID' };
@@ -203,12 +184,12 @@ export function diagnose() {
   for (const device of devices) {
     if (!device.hasPermission) {
       window.AndroidHid.requestPermission(device.id);
-      out.push({ device, error: 'falta aceptar el permiso USB; repite el diagnostico' });
+      out.push({ device, report: { error: 'falta aceptar el permiso USB; repite el diagnostico' } });
       continue;
     }
     let report;
     try {
-      report = JSON.parse(window.AndroidHid.diagnose(device.id, '0605', 1200));
+      report = JSON.parse(window.AndroidHid.diagnose(device.id, '0605', 1500));
     } catch (err) {
       report = { error: err.message };
     }

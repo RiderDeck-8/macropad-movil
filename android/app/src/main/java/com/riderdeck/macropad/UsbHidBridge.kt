@@ -106,14 +106,15 @@ class UsbHidBridge(private val context: Context) {
     fun devices(): String {
         val out = JSONArray()
         for (device in manager.deviceList.values) {
+            // Solo las interfaces propietarias: las del teclado las usa Android
+            // y apartarlas a la fuerza puede tumbar la conexion entera.
+            val useful = vendorInterfaces(device)
             val interfaces = JSONArray()
-            for (i in 0 until device.interfaceCount) {
-                val iface = device.getInterface(i)
-                if (iface.interfaceClass != UsbConstants.USB_CLASS_HID) continue
+            for (iface in useful) {
                 val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN) ?: continue
                 interfaces.put(
                     JSONObject()
-                        .put("index", i)
+                        .put("index", indexOfInterface(device, iface))
                         .put("number", iface.id)
                         .put("subclass", iface.interfaceSubclass)
                         .put("protocol", iface.interfaceProtocol)
@@ -163,7 +164,8 @@ class UsbHidBridge(private val context: Context) {
 
         val iface = device.getInterface(interfaceIndex)
         val conn = manager.openDevice(device) ?: return "ERR:no se pudo abrir el dispositivo"
-        if (!conn.claimInterface(iface, true)) {
+        // Sin forzar primero: apartar al driver del sistema solo si hace falta.
+        if (!conn.claimInterface(iface, false) && !conn.claimInterface(iface, true)) {
             conn.close()
             return "ERR:otra cosa tiene tomada la interfaz"
         }
@@ -241,191 +243,107 @@ class UsbHidBridge(private val context: Context) {
     // ------------------------------------------------------------- diagnostico
 
     /**
-     * Recorre las interfaces HID y prueba todas las estrategias en cada una,
-     * devolviendo en crudo lo que conteste. Con eso se ve cual entiende el
-     * protocolo y por que via hay que hablarle.
+     * Interfaces candidatas: solo las de proposito propietario. Las de
+     * subclase 1 son el teclado y la parte multimedia que Android esta usando,
+     * y apartarlas a la fuerza puede provocar que el dispositivo se reinicie y
+     * deje la conexion muerta.
+     */
+    private fun vendorInterfaces(device: UsbDevice): List<UsbInterface> {
+        val out = mutableListOf<UsbInterface>()
+        for (i in 0 until device.interfaceCount) {
+            val iface = device.getInterface(i)
+            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID) continue
+            if (iface.interfaceSubclass != 0) continue
+            if (firstEndpoint(iface, UsbConstants.USB_DIR_IN) == null) continue
+            out.add(iface)
+        }
+        return out
+    }
+
+    /**
+     * Informe completo y en el orden correcto: primero los descriptores sobre
+     * una conexion limpia y sin reclamar nada, despues los intentos de dialogo
+     * sobre la interfaz propietaria.
      */
     @JavascriptInterface
     fun diagnose(deviceId: Int, probeHex: String, timeoutMs: Int): String {
         close()
+        val out = JSONObject()
         val device = findDevice(deviceId)
-            ?: return JSONObject().put("error", "dispositivo no encontrado").toString()
+            ?: return out.put("error", "dispositivo no encontrado").toString()
         if (!manager.hasPermission(device)) {
-            return JSONObject().put("error", "sin permiso de Android").toString()
+            return out.put("error", "sin permiso de Android").toString()
         }
         val data = hexToBytes(probeHex, REPORT_SIZE)
-            ?: return JSONObject().put("error", "sonda invalida").toString()
+            ?: return out.put("error", "sonda invalida").toString()
 
-        val report = JSONArray()
-        for (i in 0 until device.interfaceCount) {
-            val iface = device.getInterface(i)
-            val entry = JSONObject()
-                .put("index", i)
-                .put("number", iface.id)
-                .put("class", iface.interfaceClass)
-                .put("subclass", iface.interfaceSubclass)
-                .put("protocol", iface.interfaceProtocol)
+        val conn = manager.openDevice(device)
+            ?: return out.put("error", "no se pudo abrir el dispositivo").toString()
+        out.put("fd", conn.fileDescriptor)
+        runCatching {
+            val raw = conn.rawDescriptors
+            if (raw != null) out.put("raw", bytesToHex(raw, minOf(raw.size, 200)))
+        }
 
-            val eps = JSONArray()
-            for (e in 0 until iface.endpointCount) {
-                val ep = iface.getEndpoint(e)
-                eps.put(
-                    JSONObject()
-                        .put("address", ep.address)
-                        .put("dir", if (ep.direction == UsbConstants.USB_DIR_IN) "in" else "out")
-                        .put("type", ep.type)
-                        .put("packetSize", ep.maxPacketSize)
-                )
-            }
-            entry.put("endpoints", eps)
+        // Peticion estandar, sin reclamar nada: dice si el canal de control vive.
+        val probe = ByteArray(18)
+        val n = conn.controlTransfer(
+            DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0, probe, probe.size, 1000
+        )
+        out.put("control", if (n > 0) bytesToHex(probe, n) else "fallo ($n)")
 
-            val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)
-            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID || inEp == null) {
-                entry.put("skip", "sin interfaz HID utilizable")
-                report.put(entry)
-                continue
-            }
+        val candidates = vendorInterfaces(device)
+        out.put("vendorInterfaces", JSONArray(candidates.map { it.id }))
+        if (candidates.isEmpty()) {
+            out.put("error", "el teclado no expone una interfaz propietaria")
+            conn.close()
+            return out.toString()
+        }
 
-            val conn = manager.openDevice(device)
-            if (conn == null) {
-                entry.put("error", "no se pudo abrir el dispositivo")
-                report.put(entry)
-                continue
-            }
-            val ok = conn.claimInterface(iface, true)
-            entry.put("claimed", ok)
+        val attempts = JSONArray()
+        for (iface in candidates) {
+            val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)!!
+            val outEp = firstEndpoint(iface, UsbConstants.USB_DIR_OUT)
+
+            // Primero sin forzar: si el sistema no la tiene tomada, mejor no
+            // apartar a nadie.
+            var how = "normal"
+            var ok = conn.claimInterface(iface, false)
             if (!ok) {
-                conn.close()
-                report.put(entry)
+                how = "forzada"
+                ok = conn.claimInterface(iface, true)
+            }
+            val entry = JSONObject().put("iface", iface.id).put("claim", if (ok) how else "fallo")
+            if (!ok) {
+                attempts.put(entry)
                 continue
             }
             settle(conn, iface)
 
-            val outEp = firstEndpoint(iface, UsbConstants.USB_DIR_OUT)
+            // El descriptor de reporte dice si se usan identificadores, que
+            // cambiarian el primer byte de cada paquete.
+            val rd = ByteArray(256)
+            val rdLen = conn.controlTransfer(
+                INTERFACE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_HID_REPORT,
+                iface.id, rd, rd.size, 1000
+            )
+            entry.put("reportDescriptor", if (rdLen > 0) bytesToHex(rd, rdLen) else "fallo ($rdLen)")
+
             val tries = JSONArray()
             for (s in intArrayOf(S_BULK_QUEUED, S_REQ_QUEUED, S_BULK_BULK, S_CONTROL_BULK)) {
                 if (s != S_CONTROL_BULK && outEp == null) continue
                 val reply = exchange(conn, iface.id, inEp, outEp, data, timeoutMs, s)
                 tries.put(
                     JSONObject()
-                        .put("strategy", s)
                         .put("name", STRATEGY_NAMES[s])
                         .put("reply", if (reply.isEmpty()) "sin respuesta" else reply)
                 )
             }
             entry.put("tries", tries)
-
             conn.releaseInterface(iface)
-            conn.close()
-            report.put(entry)
+            attempts.put(entry)
         }
-        return report.toString()
-    }
-
-    /**
-     * Escucha cada interfaz sin escribir nada, mientras el usuario pulsa las
-     * teclas del macropad. Separa las dos causas posibles de que no llegue
-     * respuesta: que nuestras lecturas no funcionen, o que el teclado no
-     * conteste a lo que le mandamos.
-     */
-    @JavascriptInterface
-    fun listen(deviceId: Int, msPerInterface: Int): String {
-        close()
-        val device = findDevice(deviceId)
-            ?: return JSONObject().put("error", "dispositivo no encontrado").toString()
-        if (!manager.hasPermission(device)) {
-            return JSONObject().put("error", "sin permiso de Android").toString()
-        }
-
-        val report = JSONArray()
-        for (i in 0 until device.interfaceCount) {
-            val iface = device.getInterface(i)
-            val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)
-            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID || inEp == null) continue
-
-            val entry = JSONObject().put("index", i)
-            val conn = manager.openDevice(device)
-            if (conn == null) {
-                entry.put("error", "no se pudo abrir")
-                report.put(entry)
-                continue
-            }
-            if (!conn.claimInterface(iface, true)) {
-                entry.put("error", "no se pudo reclamar")
-                conn.close()
-                report.put(entry)
-                continue
-            }
-            settle(conn, iface)
-
-            val size = maxOf(inEp.maxPacketSize, REPORT_SIZE)
-            val half = (msPerInterface / 2).coerceAtLeast(200)
-
-            val buffer = ByteArray(size)
-            val n = conn.bulkTransfer(inEp, buffer, size, half)
-            entry.put("bulk", if (n > 0) bytesToHex(buffer, n) else "nada")
-
-            val request = UsbRequest()
-            var queued = "nada"
-            runCatching {
-                if (request.initialize(conn, inEp)) {
-                    val direct = ByteBuffer.allocateDirect(size)
-                    if (request.queue(direct)) {
-                        val got = awaitRequest(conn, request, direct, half)
-                        if (got.isNotEmpty()) queued = got
-                    }
-                }
-            }
-            runCatching { request.close() }
-            entry.put("queued", queued)
-
-            conn.releaseInterface(iface)
-            conn.close()
-            report.put(entry)
-        }
-        return report.toString()
-    }
-
-    /** Descriptores del dispositivo y prueba del canal de control. */
-    @JavascriptInterface
-    fun descriptors(deviceId: Int): String {
-        close()
-        val device = findDevice(deviceId)
-            ?: return JSONObject().put("error", "dispositivo no encontrado").toString()
-        val conn = manager.openDevice(device)
-            ?: return JSONObject().put("error", "no se pudo abrir").toString()
-
-        val out = JSONObject()
-        runCatching {
-            val raw = conn.rawDescriptors
-            if (raw != null) out.put("raw", bytesToHex(raw, minOf(raw.size, 200)))
-        }
-
-        val probe = ByteArray(18)
-        val deviceDesc = conn.controlTransfer(
-            DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0, probe, probe.size, 1000
-        )
-        out.put("control", if (deviceDesc > 0) bytesToHex(probe, deviceDesc) else "fallo ($deviceDesc)")
-
-        val reports = JSONArray()
-        for (i in 0 until device.interfaceCount) {
-            val iface = device.getInterface(i)
-            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID) continue
-            conn.claimInterface(iface, true)
-            val buf = ByteArray(256)
-            val n = conn.controlTransfer(
-                INTERFACE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_HID_REPORT,
-                iface.id, buf, buf.size, 1000
-            )
-            reports.put(
-                JSONObject()
-                    .put("index", i)
-                    .put("descriptor", if (n > 0) bytesToHex(buf, n) else "fallo ($n)")
-            )
-            conn.releaseInterface(iface)
-        }
-        out.put("reportDescriptors", reports)
-
+        out.put("attempts", attempts)
         conn.close()
         return out.toString()
     }
@@ -559,6 +477,13 @@ class UsbHidBridge(private val context: Context) {
             }
         }
         runCatching { Thread.sleep(120) }
+    }
+
+    private fun indexOfInterface(device: UsbDevice, iface: UsbInterface): Int {
+        for (i in 0 until device.interfaceCount) {
+            if (device.getInterface(i) === iface) return i
+        }
+        return 0
     }
 
     private fun firstEndpoint(iface: UsbInterface, direction: Int): UsbEndpoint? {

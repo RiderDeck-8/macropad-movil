@@ -3,7 +3,7 @@ import { Keyboard, KeyType } from './protocol.js';
 import * as Cat from './catalog.js';
 import * as Mac from './macros.js';
 import { DemoTransport } from './demo.js';
-import { androidShell, connectAndroid, diagnose, listenTest } from './android.js';
+import { androidShell, connectAndroid, diagnose } from './android.js';
 
 const $ = (id) => document.getElementById(id);
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -97,7 +97,6 @@ function checkSupport() {
       'que pide Android.';
     $('btnAnyDevice').hidden = true;
     $('btnUsbDiag').hidden = false;
-    $('btnListen').hidden = false;
     return true;
   }
   $('btnAnyDevice').hidden = !HID.hidSupported();
@@ -308,71 +307,31 @@ async function scanAny() {
   }
 }
 
-/** Vuelca en pantalla lo que contesta cada interfaz del teclado. */
+/** Vuelca en pantalla el estado del canal USB y lo que contesta el teclado. */
 function runDiagnose() {
-  log('Probando todas las interfaces...');
-  const result = diagnose();
-  if (result.error) {
-    log(result.error, true);
-    return;
-  }
-  const hex = (n) => n.toString(16).padStart(4, '0');
-  const lines = [];
-  for (const { device, report, error } of result) {
-    lines.push(`<b>${device.name}</b> ${hex(device.vendorId)}:${hex(device.productId)}`);
-    if (error) { lines.push(error); continue; }
-    if (report.error) { lines.push(report.error); continue; }
-    for (const iface of report) {
-      const eps = (iface.endpoints || [])
-        .map((e) => `${e.dir} 0x${e.address.toString(16)} tipo ${e.type} ${e.packetSize}b`)
-        .join(', ');
-      lines.push(
-        `if ${iface.index} · clase ${iface.class} sub ${iface.subclass} ` +
-        `proto ${iface.protocol}<br>&nbsp;&nbsp;${eps || 'sin endpoints'}`
-      );
-      if (iface.skip) { lines.push(`&nbsp;&nbsp;omitida: ${iface.skip}`); continue; }
-      if (iface.claimed === false) { lines.push('&nbsp;&nbsp;no se pudo reclamar'); continue; }
-      for (const t of iface.tries || []) {
-        lines.push(`&nbsp;&nbsp;${t.name}: ${t.reply}`);
-      }
-    }
-  }
-  log('<span class="diag">' + lines.join('<br>') + '</span>');
-}
-
-/**
- * Escucha sin escribir. Si llegan bytes al pulsar teclas, las lecturas
- * funcionan y el problema es el comando; si no llega nada, el problema es la
- * lectura.
- */
-function runListen() {
-  log(
-    '<b>Pulsa las teclas del macropad sin parar</b> durante los proximos ' +
-    'segundos. La pantalla se quedara quieta mientras escucha; es normal.'
-  );
-  // Un respiro para que el aviso se pinte antes de bloquear el hilo.
+  log('Hablando con el teclado...');
   setTimeout(() => {
-    const r = listenTest(2000);
-    if (r.error) { log(r.error, true); return; }
+    const result = diagnose();
+    if (result.error) { log(result.error, true); return; }
+    const hex = (n) => n.toString(16).padStart(4, '0');
     const lines = [];
-    lines.push('<b>Escucha sin escribir nada</b>');
-    for (const iface of r.listen.error ? [] : r.listen) {
-      lines.push(
-        `if ${iface.index}: bulk ${iface.bulk || iface.error} · ` +
-        `encolada ${iface.queued || '-'}`
-      );
+    for (const { device, report } of result) {
+      lines.push(`<b>${device.name}</b> ${hex(device.vendorId)}:${hex(device.productId)}`);
+      if (report.error) { lines.push(report.error); continue; }
+      lines.push(`descriptor comun: ${report.control}`);
+      for (const a of report.attempts || []) {
+        lines.push(`if ${a.iface} · toma ${a.claim}`);
+        if (a.reportDescriptor) {
+          lines.push(`&nbsp;&nbsp;descriptor de reporte: ${a.reportDescriptor}`);
+        }
+        for (const t of a.tries || []) {
+          lines.push(`&nbsp;&nbsp;${t.name}: ${t.reply}`);
+        }
+      }
+      if (report.raw) lines.push(`crudo: ${report.raw}`);
     }
-    if (r.listen.error) lines.push(r.listen.error);
-
-    const d = r.descriptors || {};
-    lines.push('<br><b>Descriptores</b>');
-    lines.push(`control: ${d.control || d.error || '-'}`);
-    for (const rd of d.reportDescriptors || []) {
-      lines.push(`reporte if ${rd.index}: ${rd.descriptor}`);
-    }
-    if (d.raw) lines.push(`crudo: ${d.raw}`);
     log('<span class="diag">' + lines.join('<br>') + '</span>');
-  }, 1400);
+  }, 300);
 }
 
 function genericLayout() {
@@ -1020,7 +979,6 @@ function wire() {
   $('connectBtn').onclick = connect;
   $('btnAnyDevice').onclick = scanAny;
   $('btnUsbDiag').onclick = runDiagnose;
-  $('btnListen').onclick = runListen;
   $('btnDemo').onclick = () => {
     location.search = '?demo=1';
   };
