@@ -180,12 +180,27 @@ class UsbHidBridge(private val context: Context) {
         val device = findDevice(deviceId) ?: return "ERR:dispositivo no encontrado"
         if (!manager.hasPermission(device)) return "ERR:sin permiso de Android"
         val conn = manager.openDevice(device) ?: return "ERR:no se pudo abrir el dispositivo"
+        val iface = vendorInterfaces(device).firstOrNull()
         return try {
+            // Reclamar primero: ademas de dar acceso a los endpoints, despierta
+            // al dispositivo si el sistema lo tenia suspendido.
+            var claimedHere = false
+            if (iface != null) {
+                claimedHere = conn.claimInterface(iface, false) || conn.claimInterface(iface, true)
+            }
             val probe = ByteArray(18)
-            val n = conn.controlTransfer(
+            var n = conn.controlTransfer(
                 DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0,
                 probe, probe.size, 2000
             )
+            if (n <= 0) {
+                runCatching { Thread.sleep(200) }
+                n = conn.controlTransfer(
+                    DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0,
+                    probe, probe.size, 3000
+                )
+            }
+            if (claimedHere && iface != null) conn.releaseInterface(iface)
             if (n > 0) "" else "ERR:el sistema no deja pasar trafico USB"
         } finally {
             conn.close()
@@ -432,6 +447,17 @@ class UsbHidBridge(private val context: Context) {
                 attempts.put(entry)
                 continue
             }
+
+            // Repetir la peticion estandar ya con la interfaz reclamada. Es
+            // distinto: reclamar despierta al dispositivo si el sistema lo
+            // habia dormido, y antes de eso ep0 puede no contestar.
+            val after = ByteArray(18)
+            val an = conn.controlTransfer(
+                DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0,
+                after, after.size, 2000
+            )
+            entry.put("controlTrasTomar", if (an > 0) bytesToHex(after, an) else "fallo ($an)")
+
             settle(conn, iface)
 
             // El descriptor de reporte dice si se usan identificadores, que

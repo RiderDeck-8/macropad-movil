@@ -341,6 +341,9 @@ function runDiagnose() {
       );
       for (const a of report.attempts || []) {
         lines.push(`if ${a.iface} · toma ${a.claim}`);
+        if (a.controlTrasTomar) {
+          lines.push(`&nbsp;&nbsp;control tras tomar: ${a.controlTrasTomar}`);
+        }
         if (a.reportDescriptor) {
           lines.push(`&nbsp;&nbsp;descriptor de reporte: ${a.reportDescriptor}`);
         }
