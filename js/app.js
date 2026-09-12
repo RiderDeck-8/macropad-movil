@@ -318,7 +318,15 @@ function runDiagnose() {
     for (const { device, report } of result) {
       lines.push(`<b>${device.name}</b> ${hex(device.vendorId)}:${hex(device.productId)}`);
       if (report.error) { lines.push(report.error); continue; }
-      lines.push(`descriptor comun: ${report.control}`);
+      lines.push(
+        `${report.modelo} · Android ${report.android} · ` +
+        `fd ${report.fd} · serie ${report.serie || '-'}`
+      );
+      lines.push(
+        `descriptor comun: ${report.control}` +
+        (report.controlReintento ? ' (con reintento largo)' : '') +
+        ` · setConfig ${report.setConfig}`
+      );
       for (const a of report.attempts || []) {
         lines.push(`if ${a.iface} · toma ${a.claim}`);
         if (a.reportDescriptor) {

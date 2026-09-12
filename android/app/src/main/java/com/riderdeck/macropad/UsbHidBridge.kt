@@ -277,20 +277,42 @@ class UsbHidBridge(private val context: Context) {
         val data = hexToBytes(probeHex, REPORT_SIZE)
             ?: return out.put("error", "sonda invalida").toString()
 
+        out.put("android", Build.VERSION.RELEASE)
+        out.put("modelo", "${Build.MANUFACTURER} ${Build.MODEL}")
+        out.put("dispositivos", manager.deviceList.size)
+        out.put("deviceId", device.deviceId)
+
         val conn = manager.openDevice(device)
             ?: return out.put("error", "no se pudo abrir el dispositivo").toString()
         out.put("fd", conn.fileDescriptor)
+        runCatching { out.put("serie", conn.serial ?: "sin serie") }
         runCatching {
             val raw = conn.rawDescriptors
             if (raw != null) out.put("raw", bytesToHex(raw, minOf(raw.size, 200)))
         }
 
         // Peticion estandar, sin reclamar nada: dice si el canal de control vive.
+        // El -1 de Android tapa igual un error inmediato que una espera agotada,
+        // asi que se reintenta con mas margen antes de dar nada por perdido.
         val probe = ByteArray(18)
-        val n = conn.controlTransfer(
+        var n = conn.controlTransfer(
             DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0, probe, probe.size, 1000
         )
+        if (n <= 0) {
+            runCatching { Thread.sleep(300) }
+            n = conn.controlTransfer(
+                DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0,
+                probe, probe.size, 4000
+            )
+            out.put("controlReintento", true)
+        }
         out.put("control", if (n > 0) bytesToHex(probe, n) else "fallo ($n)")
+
+        // Seleccionar la configuracion explicitamente desencalla algunos casos.
+        runCatching {
+            val cfg = device.getConfiguration(0)
+            out.put("setConfig", conn.setConfiguration(cfg))
+        }
 
         val candidates = vendorInterfaces(device)
         out.put("vendorInterfaces", JSONArray(candidates.map { it.id }))
