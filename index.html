@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1116">
+<title>MacroPad Movil</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="statusDot"></span>
+    <div>
+      <div class="title" id="deviceName">Sin conectar</div>
+      <div class="sub" id="deviceSub">Toca conectar para empezar</div>
+    </div>
+  </div>
+  <button class="btn primary" id="connectBtn">Conectar</button>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<main id="main" class="hidden">
+
+  <section class="strip">
+    <div class="strip-row" id="profileRow"></div>
+    <div class="strip-row" id="layerRow"></div>
+  </section>
+
+  <!-- ------------------------------------------------------------ teclas -->
+  <section class="view" id="view-keys">
+    <div class="board-wrap">
+      <div class="board" id="board"></div>
+    </div>
+    <p class="hint">Toca una tecla, en el dibujo o en la lista, para cambiarla.</p>
+    <div class="card" id="keyDetail" hidden>
+      <div class="row">
+        <div>
+          <div class="muted small" id="keyDetailTitle">Tecla</div>
+          <div class="big" id="keyDetailName">—</div>
+          <div class="muted small" id="keyDetailValue"></div>
+        </div>
+        <input type="color" id="keyColor" title="Color de esta tecla">
+      </div>
+      <div class="row gap">
+        <button class="btn primary grow" id="btnAssign">Cambiar funcion</button>
+        <button class="btn ghost" id="btnDisable">Desactivar</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Todas las teclas</h2>
+      <div class="key-list" id="keyList"></div>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------------------- luz -->
+  <section class="view hidden" id="view-light">
+    <div class="card">
+      <h2>Efecto</h2>
+      <div class="chips" id="effectList"></div>
+    </div>
+    <div class="card">
+      <h2>Ajustes de luz</h2>
+      <label class="field">
+        <span>Brillo <b id="brightVal">3</b></span>
+        <input type="range" id="brightness" min="0" max="4" step="1">
+      </label>
+      <label class="field">
+        <span>Velocidad <b id="speedVal">1</b></span>
+        <input type="range" id="speed" min="0" max="4" step="1">
+      </label>
+      <label class="field switch">
+        <span>Direccion invertida</span>
+        <input type="checkbox" id="direction">
+      </label>
+      <label class="field switch">
+        <span>Color fijo</span>
+        <input type="checkbox" id="fixedColor">
+      </label>
+      <label class="field" id="colorField">
+        <span>Color</span>
+        <input type="color" id="lightColor">
+      </label>
+    </div>
+    <div class="card">
+      <h2>Color por tecla</h2>
+      <p class="muted small">Disponible cuando el efecto es <i>custom</i>. Cambia el color desde la pestana Teclas.</p>
+      <button class="btn ghost" id="btnReadColors">Releer colores del teclado</button>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ macros -->
+  <section class="view hidden" id="view-macros">
+    <div class="card">
+      <h2>Macros</h2>
+      <div class="chips" id="macroList"></div>
+      <div class="muted small" id="macroUsage"></div>
+    </div>
+    <div class="card">
+      <div class="row">
+        <h2 id="macroTitle">M0</h2>
+        <button class="btn ghost small" id="btnClearMacro">Vaciar</button>
+      </div>
+      <ol class="events" id="macroEvents"></ol>
+      <div class="row gap wrap">
+        <button class="btn" id="btnAddEvent">Anadir evento</button>
+        <button class="btn" id="btnRecord">Grabar teclado</button>
+      </div>
+      <button class="btn primary wide" id="btnSaveMacros">Guardar macros en el teclado</button>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- ajustes -->
+  <section class="view hidden" id="view-settings">
+    <div class="card">
+      <h2>Dispositivo</h2>
+      <dl class="info" id="deviceInfo"></dl>
+    </div>
+    <div class="card">
+      <h2>Copia de seguridad</h2>
+      <div class="row gap wrap">
+        <button class="btn" id="btnExport">Exportar configuracion</button>
+        <button class="btn" id="btnImport">Importar</button>
+        <input type="file" id="importFile" accept="application/json" hidden>
+      </div>
+      <p class="muted small">Guarda teclas, colores, luz y macros en un archivo JSON.</p>
+    </div>
+    <div class="card">
+      <h2>Suspension automatica</h2>
+      <label class="field">
+        <span>Minutos sin uso <b id="sleepVal">0</b></span>
+        <input type="range" id="sleepTime" min="0" max="60" step="1">
+      </label>
+      <button class="btn ghost" id="btnSleep">Aplicar</button>
+    </div>
+    <div class="card danger">
+      <h2>Restablecer</h2>
+      <div class="row gap wrap">
+        <button class="btn ghost" id="btnResetMacros">Borrar macros</button>
+        <button class="btn ghost" id="btnFactory">Valores de fabrica</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ---------------------------------------------------------- pantalla inicial -->
+<section id="welcome" class="welcome">
+  <h1>MacroPad Movil</h1>
+  <p>Configura tu teclado macro desde el telefono: teclas, luces y macros, sin PC.</p>
+  <ol class="steps">
+    <li>Conecta el teclado al telefono con un cable o adaptador USB-C (OTG).</li>
+    <li>Toca <b>Conectar</b> y elige el dispositivo en la lista del navegador.</li>
+  </ol>
+  <div id="supportNote" class="note"></div>
+</section>
+
+<nav class="tabs hidden" id="tabs">
+  <button class="tab active" data-view="keys">Teclas</button>
+  <button class="tab" data-view="light">Luz</button>
+  <button class="tab" data-view="macros">Macros</button>
+  <button class="tab" data-view="settings">Ajustes</button>
+</nav>
+
+<!-- ------------------------------------------------------------------ sheets -->
+<div class="sheet hidden" id="sheet">
+  <div class="sheet-bg" data-close></div>
+  <div class="sheet-body">
+    <div class="sheet-head">
+      <h2 id="sheetTitle">Elegir funcion</h2>
+      <button class="btn ghost small" data-close>Cerrar</button>
+    </div>
+    <div id="sheetContent"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

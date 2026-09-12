@@ -1,0 +1,27 @@
+# Sitio estatico sin compilacion: Netlify publica la raiz del repositorio.
+[build]
+  publish = "."
+  command = ""
+
+# El service worker y el manifiesto no deben quedarse cacheados en el CDN,
+# o los cambios tardan en llegar a los telefonos que ya abrieron la app.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Los layouts y catalogos nunca cambian dentro de una version.
+[[headers]]
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"

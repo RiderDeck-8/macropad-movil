@@ -1,0 +1,15 @@
+{
+  "name": "MacroPad Movil",
+  "short_name": "MacroPad",
+  "description": "Configura teclados macro SDCX desde el telefono: teclas, luces y macros.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e1116",
+  "theme_color": "#0e1116",
+  "lang": "es",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
