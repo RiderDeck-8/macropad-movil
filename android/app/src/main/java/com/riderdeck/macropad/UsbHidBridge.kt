@@ -301,12 +301,21 @@ class UsbHidBridge(private val context: Context) {
                 entry.put("claim", if (ok) how else "fallo")
                 if (!ok) continue
 
+                // Reactivar la interfaz. Al desenganchar el controlador del
+                // sistema, sus endpoints pueden quedar deshabilitados, y esto
+                // es lo que los vuelve a poner en marcha.
+                entry.put("setInterface", runCatching { conn.setInterface(iface) }.getOrDefault(false))
+
+                val started = System.currentTimeMillis()
                 val buf = ByteArray(18)
                 val n = conn.controlTransfer(
                     DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0,
                     buf, buf.size, 2000
                 )
-                entry.put("control", if (n > 0) "ok" else "fallo ($n)")
+                entry.put(
+                    "control",
+                    if (n > 0) "ok" else "fallo $n en ${System.currentTimeMillis() - started}ms"
+                )
 
                 // 1. Escuchar sin escribir nada.
                 entry.put("escucha", readRaw(conn, inEp, listenMs))
@@ -337,15 +346,21 @@ class UsbHidBridge(private val context: Context) {
         return out.toString()
     }
 
-    /** Lee del endpoint distinguiendo "nada" de "error". */
+    /**
+     * Lee del endpoint informando del tiempo empleado. El dato importante es
+     * ese: si vuelve al instante, el sistema rechaza la peticion; si tarda lo
+     * que dura la espera, es que el dispositivo no envio nada.
+     */
     private fun readRaw(conn: UsbDeviceConnection, ep: UsbEndpoint, timeoutMs: Int): String {
         val size = maxOf(ep.maxPacketSize, REPORT_SIZE)
         val buffer = ByteArray(size)
+        val started = System.currentTimeMillis()
         val n = conn.bulkTransfer(ep, buffer, size, timeoutMs)
+        val took = System.currentTimeMillis() - started
         return when {
-            n > 0 -> bytesToHex(buffer, n)
-            n == 0 -> "vacio"
-            else -> "nada ($n)"
+            n > 0 -> bytesToHex(buffer, n) + " (${took}ms)"
+            n == 0 -> "vacio (${took}ms)"
+            else -> "nada, $n en ${took}ms"
         }
     }
 
@@ -376,6 +391,10 @@ class UsbHidBridge(private val context: Context) {
             conn.close()
             return "ERR:la interfaz no tiene endpoint de entrada"
         }
+
+        // Reactiva los endpoints, que pueden haber quedado deshabilitados al
+        // desenganchar el controlador del sistema.
+        runCatching { conn.setInterface(iface) }
 
         connection = conn
         claimed = iface

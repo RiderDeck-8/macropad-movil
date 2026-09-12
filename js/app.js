@@ -329,6 +329,9 @@ function runDeep() {
     const lines = [`<b>${r.device.name}</b>`];
     for (const i of r.report.interfaces || []) {
       lines.push(`if ${i.iface} · sub ${i.subclass} · toma ${i.claim || i.skip || i.error}`);
+      if (i.setInterface !== undefined) {
+        lines.push(`&nbsp;&nbsp;setInterface: ${i.setInterface}`);
+      }
       if (i.control) lines.push(`&nbsp;&nbsp;control: ${i.control}`);
       if (i.escucha) lines.push(`&nbsp;&nbsp;<b>escucha: ${i.escucha}</b>`);
       if (i.escrito !== undefined) lines.push(`&nbsp;&nbsp;escrito: ${i.escrito}`);
