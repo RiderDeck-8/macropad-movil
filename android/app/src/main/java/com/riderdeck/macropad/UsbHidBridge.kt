@@ -41,6 +41,17 @@ class UsbHidBridge(private val context: Context) {
         private const val HID_OUT_REQUEST_TYPE = 0x21
         private const val HID_OUTPUT_REPORT = 0x0200
 
+        private const val ENDPOINT_REQUEST_TYPE = 0x02
+        private const val CLEAR_FEATURE = 0x01
+        private const val ENDPOINT_HALT = 0x00
+
+        /** GET_DESCRIPTOR estandar, para comprobar si el canal de control vive. */
+        private const val GET_DESCRIPTOR = 0x06
+        private const val DEVICE_IN_REQUEST_TYPE = 0x80
+        private const val INTERFACE_IN_REQUEST_TYPE = 0x81
+        private const val DESCRIPTOR_DEVICE = 0x0100
+        private const val DESCRIPTOR_HID_REPORT = 0x2200
+
         /**
          * Combinaciones de escritura y lectura, por orden de preferencia.
          *
@@ -311,6 +322,114 @@ class UsbHidBridge(private val context: Context) {
         return report.toString()
     }
 
+    /**
+     * Escucha cada interfaz sin escribir nada, mientras el usuario pulsa las
+     * teclas del macropad. Separa las dos causas posibles de que no llegue
+     * respuesta: que nuestras lecturas no funcionen, o que el teclado no
+     * conteste a lo que le mandamos.
+     */
+    @JavascriptInterface
+    fun listen(deviceId: Int, msPerInterface: Int): String {
+        close()
+        val device = findDevice(deviceId)
+            ?: return JSONObject().put("error", "dispositivo no encontrado").toString()
+        if (!manager.hasPermission(device)) {
+            return JSONObject().put("error", "sin permiso de Android").toString()
+        }
+
+        val report = JSONArray()
+        for (i in 0 until device.interfaceCount) {
+            val iface = device.getInterface(i)
+            val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)
+            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID || inEp == null) continue
+
+            val entry = JSONObject().put("index", i)
+            val conn = manager.openDevice(device)
+            if (conn == null) {
+                entry.put("error", "no se pudo abrir")
+                report.put(entry)
+                continue
+            }
+            if (!conn.claimInterface(iface, true)) {
+                entry.put("error", "no se pudo reclamar")
+                conn.close()
+                report.put(entry)
+                continue
+            }
+            settle(conn, iface)
+
+            val size = maxOf(inEp.maxPacketSize, REPORT_SIZE)
+            val half = (msPerInterface / 2).coerceAtLeast(200)
+
+            val buffer = ByteArray(size)
+            val n = conn.bulkTransfer(inEp, buffer, size, half)
+            entry.put("bulk", if (n > 0) bytesToHex(buffer, n) else "nada")
+
+            val request = UsbRequest()
+            var queued = "nada"
+            runCatching {
+                if (request.initialize(conn, inEp)) {
+                    val direct = ByteBuffer.allocateDirect(size)
+                    if (request.queue(direct)) {
+                        val got = awaitRequest(conn, request, direct, half)
+                        if (got.isNotEmpty()) queued = got
+                    }
+                }
+            }
+            runCatching { request.close() }
+            entry.put("queued", queued)
+
+            conn.releaseInterface(iface)
+            conn.close()
+            report.put(entry)
+        }
+        return report.toString()
+    }
+
+    /** Descriptores del dispositivo y prueba del canal de control. */
+    @JavascriptInterface
+    fun descriptors(deviceId: Int): String {
+        close()
+        val device = findDevice(deviceId)
+            ?: return JSONObject().put("error", "dispositivo no encontrado").toString()
+        val conn = manager.openDevice(device)
+            ?: return JSONObject().put("error", "no se pudo abrir").toString()
+
+        val out = JSONObject()
+        runCatching {
+            val raw = conn.rawDescriptors
+            if (raw != null) out.put("raw", bytesToHex(raw, minOf(raw.size, 200)))
+        }
+
+        val probe = ByteArray(18)
+        val deviceDesc = conn.controlTransfer(
+            DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0, probe, probe.size, 1000
+        )
+        out.put("control", if (deviceDesc > 0) bytesToHex(probe, deviceDesc) else "fallo ($deviceDesc)")
+
+        val reports = JSONArray()
+        for (i in 0 until device.interfaceCount) {
+            val iface = device.getInterface(i)
+            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID) continue
+            conn.claimInterface(iface, true)
+            val buf = ByteArray(256)
+            val n = conn.controlTransfer(
+                INTERFACE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_HID_REPORT,
+                iface.id, buf, buf.size, 1000
+            )
+            reports.put(
+                JSONObject()
+                    .put("index", i)
+                    .put("descriptor", if (n > 0) bytesToHex(buf, n) else "fallo ($n)")
+            )
+            conn.releaseInterface(iface)
+        }
+        out.put("reportDescriptors", reports)
+
+        conn.close()
+        return out.toString()
+    }
+
     // ---------------------------------------------------------------- interno
 
     /**
@@ -377,7 +496,11 @@ class UsbHidBridge(private val context: Context) {
                 null
             } ?: break
             if (done !== expected) continue
-            val length = buffer.position()
+            // Segun la version de Android, queue(ByteBuffer) actualiza la
+            // posicion del buffer o no. Si no lo hace, hay que mirar el
+            // contenido entero y quedarse con lo que no sea relleno.
+            var length = buffer.position()
+            if (length <= 0) length = trimmedLength(buffer)
             if (length <= 0) return ""
             val bytes = ByteArray(length)
             buffer.rewind()
@@ -386,6 +509,16 @@ class UsbHidBridge(private val context: Context) {
         }
         runCatching { expected.cancel() }
         return ""
+    }
+
+    /** Ultimo byte distinto de cero del buffer, para cuando no hay posicion. */
+    private fun trimmedLength(buffer: ByteBuffer): Int {
+        buffer.rewind()
+        var last = 0
+        for (i in 0 until buffer.capacity()) {
+            if (buffer.get(i).toInt() != 0) last = i + 1
+        }
+        return last
     }
 
     private fun writeWithRequest(
@@ -414,6 +547,16 @@ class UsbHidBridge(private val context: Context) {
     private fun settle(conn: UsbDeviceConnection, iface: UsbInterface) {
         runCatching {
             conn.controlTransfer(HID_OUT_REQUEST_TYPE, HID_SET_IDLE, 0, iface.id, null, 0, 500)
+        }
+        // Un endpoint que quedo detenido no vuelve a transferir hasta que se
+        // le quita esa condicion.
+        for (e in 0 until iface.endpointCount) {
+            val address = iface.getEndpoint(e).address
+            runCatching {
+                conn.controlTransfer(
+                    ENDPOINT_REQUEST_TYPE, CLEAR_FEATURE, ENDPOINT_HALT, address, null, 0, 500
+                )
+            }
         }
         runCatching { Thread.sleep(120) }
     }

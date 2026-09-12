@@ -3,7 +3,7 @@ import { Keyboard, KeyType } from './protocol.js';
 import * as Cat from './catalog.js';
 import * as Mac from './macros.js';
 import { DemoTransport } from './demo.js';
-import { androidShell, connectAndroid, diagnose } from './android.js';
+import { androidShell, connectAndroid, diagnose, listenTest } from './android.js';
 
 const $ = (id) => document.getElementById(id);
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -97,6 +97,7 @@ function checkSupport() {
       'que pide Android.';
     $('btnAnyDevice').hidden = true;
     $('btnUsbDiag').hidden = false;
+    $('btnListen').hidden = false;
     return true;
   }
   $('btnAnyDevice').hidden = !HID.hidSupported();
@@ -337,6 +338,41 @@ function runDiagnose() {
     }
   }
   log('<span class="diag">' + lines.join('<br>') + '</span>');
+}
+
+/**
+ * Escucha sin escribir. Si llegan bytes al pulsar teclas, las lecturas
+ * funcionan y el problema es el comando; si no llega nada, el problema es la
+ * lectura.
+ */
+function runListen() {
+  log(
+    '<b>Pulsa las teclas del macropad sin parar</b> durante los proximos ' +
+    'segundos. La pantalla se quedara quieta mientras escucha; es normal.'
+  );
+  // Un respiro para que el aviso se pinte antes de bloquear el hilo.
+  setTimeout(() => {
+    const r = listenTest(2000);
+    if (r.error) { log(r.error, true); return; }
+    const lines = [];
+    lines.push('<b>Escucha sin escribir nada</b>');
+    for (const iface of r.listen.error ? [] : r.listen) {
+      lines.push(
+        `if ${iface.index}: bulk ${iface.bulk || iface.error} · ` +
+        `encolada ${iface.queued || '-'}`
+      );
+    }
+    if (r.listen.error) lines.push(r.listen.error);
+
+    const d = r.descriptors || {};
+    lines.push('<br><b>Descriptores</b>');
+    lines.push(`control: ${d.control || d.error || '-'}`);
+    for (const rd of d.reportDescriptors || []) {
+      lines.push(`reporte if ${rd.index}: ${rd.descriptor}`);
+    }
+    if (d.raw) lines.push(`crudo: ${d.raw}`);
+    log('<span class="diag">' + lines.join('<br>') + '</span>');
+  }, 1400);
 }
 
 function genericLayout() {
@@ -984,6 +1020,7 @@ function wire() {
   $('connectBtn').onclick = connect;
   $('btnAnyDevice').onclick = scanAny;
   $('btnUsbDiag').onclick = runDiagnose;
+  $('btnListen').onclick = runListen;
   $('btnDemo').onclick = () => {
     location.search = '?demo=1';
   };

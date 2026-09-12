@@ -172,6 +172,29 @@ async function probe(device, onStep) {
   return null;
 }
 
+/**
+ * Escucha sin escribir nada mientras el usuario pulsa teclas, y lee los
+ * descriptores. Es la prueba que separa "nuestras lecturas no funcionan" de
+ * "el teclado no contesta a lo que le mandamos".
+ */
+export function listenTest(msPerInterface = 2000) {
+  const devices = listDevices();
+  if (!devices.length) return { error: 'Android no ve ningun dispositivo USB HID' };
+  const device = devices[0];
+  if (!device.hasPermission) {
+    window.AndroidHid.requestPermission(device.id);
+    return { error: 'falta aceptar el permiso USB; repite la prueba' };
+  }
+  const parse = (text) => {
+    try { return JSON.parse(text); } catch (e) { return { error: e.message }; }
+  };
+  return {
+    device,
+    listen: parse(window.AndroidHid.listen(device.id, msPerInterface)),
+    descriptors: parse(window.AndroidHid.descriptors(device.id)),
+  };
+}
+
 /** Vuelca lo que contesta cada interfaz, para cuando el sondeo no acierta. */
 export function diagnose() {
   const devices = listDevices();
