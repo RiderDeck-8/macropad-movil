@@ -46,12 +46,14 @@ android {
     }
 }
 
-androidComponents {
-    onVariants { variant ->
-        val name = variant.name.replaceFirstChar { it.uppercase() }
-        tasks.named("merge${name}Assets") { dependsOn(copyWebAssets) }
+// Las tareas de variante las crea AGP despues de configurar el proyecto, asi
+// que hay que engancharse segun aparecen en vez de buscarlas por nombre.
+tasks.whenTaskAdded {
+    if (name.startsWith("merge") && name.endsWith("Assets")) {
+        dependsOn(copyWebAssets)
     }
 }
+tasks.named("preBuild") { dependsOn(copyWebAssets) }
 
 dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
