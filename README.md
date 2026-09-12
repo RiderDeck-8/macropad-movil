@@ -23,11 +23,14 @@ Android esa API es muy reciente:
 | Chrome en Android 153 o anterior | No funciona: la API no existe |
 | Firefox y Safari, cualquier plataforma | No funciona: no implementan WebHID |
 
-Para activarla en Chrome 154–156:
+En Chromium 154, 155 y 156 la API está en fase de prueba para desarrolladores
+(*DevTrial*), así que no tiene una casilla propia en `chrome://flags`: se
+enciende con el interruptor general de funciones experimentales.
 
-1. Abre `chrome://flags/#enable-web-hid`
-2. Ponla en **Enabled**
-3. Reinicia Chrome
+1. Abre `chrome://flags`
+2. Busca **experimental** y pon **Experimental Web Platform features** en **Enabled**
+3. Busca también **hid**, por si esa compilación añade una casilla dedicada
+4. Pulsa **Relaunch**
 
 Mientras Chrome estable siga en 153, la forma de probarlo es instalar **Chrome
 Beta** (154) o **Chrome Dev** (155) desde Play Store. Son aplicaciones aparte,

@@ -130,6 +130,18 @@ function engine() {
   };
 }
 
+// WebHID en Android esta en fase DevTrial, asi que no tiene una casilla propia
+// en chrome://flags: se enciende con el interruptor general de funciones web
+// experimentales. Algunas compilaciones anaden ademas una casilla dedicada.
+const FLAG_STEPS =
+  '<ol class="steps tight">' +
+  '<li>Abre <code>chrome://flags</code> en ese navegador.</li>' +
+  '<li>Busca <b>experimental</b> y pon <b>Experimental Web Platform features</b> ' +
+  'en <b>Enabled</b>.</li>' +
+  '<li>Busca tambien <b>hid</b>. Si aparece una casilla de WebHID, activala.</li>' +
+  '<li>Pulsa <b>Relaunch</b> y vuelve aqui.</li>' +
+  '</ol>';
+
 /** El primer paso concreto que le toca a este navegador en concreto. */
 function advice() {
   const { version, android } = engine();
@@ -138,19 +150,15 @@ function advice() {
       'no implementan WebHID.';
   }
   if (version >= 154) {
-    return `Tu navegador va sobre Chromium ${version}, que ya incluye WebHID, ` +
-      'pero viene apagado. Abre <code>chrome://flags/#enable-web-hid</code> ' +
-      '(en Brave, <code>brave://flags/#enable-web-hid</code>), ponlo en ' +
-      '<b>Enabled</b> y reinicia el navegador.<br><br>' +
-      'Si la bandera no aparece, ese navegador todavia no la trae: prueba con ' +
-      'Chrome. Desde Chromium 157 viene activada de serie.';
+    return `Tu navegador va sobre Chromium ${version}, que ya trae WebHID, ` +
+      'pero viene apagado porque todavia esta en pruebas.<br><br>' + FLAG_STEPS;
   }
   return `Tu navegador va sobre Chromium ${version || 'desconocido'}, y WebHID ` +
     'no llega a Android hasta Chromium <b>154</b>.<br><br>' +
     'Para probarlo hoy, instala <b>Chrome Beta</b> o <b>Chrome Dev</b> desde ' +
-    'Play Store, activa <code>chrome://flags/#enable-web-hid</code> y reinicia. ' +
-    'Conviven con tu navegador normal. Si prefieres esperar, Chrome 157 lo ' +
-    'trae activado sin tocar nada.';
+    'Play Store: son aplicaciones aparte y conviven con tu navegador normal. ' +
+    'Despues:<br><br>' + FLAG_STEPS +
+    '<br>Si prefieres esperar, Chromium 157 lo trae activado sin tocar nada.';
 }
 
 function diagnostics() {

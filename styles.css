@@ -159,6 +159,8 @@ input[type=number], select {
 .note code { background: #000; padding: 2px 6px; border-radius: 5px; font-size: 12.5px; user-select: all; }
 .note.bad { border-color: #6b4c1d; background: #2a2113; }
 .note .diag { display: block; font-size: 11.5px; color: var(--muted); font-family: ui-monospace, monospace; }
+.steps.tight { margin: 4px 0; padding-left: 18px; color: inherit; font-size: 13.5px; }
+.steps.tight li { margin-bottom: 6px; }
 
 /* ---------------------------------------------------------------- pestanas */
 .tabs {
