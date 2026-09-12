@@ -39,6 +39,33 @@ export async function pickDevice() {
   return picked.filter((d) => matches(d, filters))[0] || picked[0] || null;
 }
 
+/**
+ * Selector sin filtros: muestra todo lo que el navegador ve por USB.
+ * Sirve para distinguir "no hay conexion USB" de "este modelo no esta en la
+ * lista de VID/PID conocidos".
+ */
+export async function pickAnyDevice() {
+  const picked = await navigator.hid.requestDevice({ filters: [] });
+  return picked[0] || null;
+}
+
+/** Describe un dispositivo para poder anadirlo a data/devices.json. */
+export function describeDevice(device) {
+  const hex = (n) => '0x' + n.toString(16).padStart(4, '0');
+  return {
+    productName: device.productName || '(sin nombre)',
+    vendorId: hex(device.vendorId),
+    productId: hex(device.productId),
+    collections: (device.collections || []).map(
+      (c) => `${hex(c.usagePage)}:${hex(c.usage)}`
+    ),
+  };
+}
+
+export async function isKnown(device) {
+  return matches(device, await loadFilters());
+}
+
 function matches(device, filters) {
   const cols = device.collections || [];
   return filters.some((f) => {

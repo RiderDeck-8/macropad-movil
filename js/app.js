@@ -84,8 +84,10 @@ function checkSupport() {
       '<b>Modo demostracion.</b> Hay un teclado simulado de 3 teclas y rueda: ' +
       'puedes recorrer toda la interfaz sin conectar nada. Quita <code>?demo=1</code> ' +
       'de la direccion para usar el teclado real.';
+    $('welcomeActions').hidden = true;
     return true;
   }
+  $('btnAnyDevice').hidden = !HID.hidSupported();
   if (!secure) {
     note.className = 'note bad';
     note.innerHTML =
@@ -171,6 +173,28 @@ function diagnostics() {
 
 // -------------------------------------------------------------------- conexion
 
+/** Mensaje persistente en la pantalla inicial; el toast se va demasiado rapido. */
+function log(html, bad = false) {
+  const el = $('connectLog');
+  el.className = 'note' + (bad ? ' bad' : '');
+  el.innerHTML = html;
+  el.classList.remove('hidden');
+}
+
+const NOT_FOUND =
+  'El navegador no encontro ningun teclado compatible.<br><br>' +
+  'Repasa por este orden:<br>' +
+  '<ol class="steps tight">' +
+  '<li>El teclado tiene que estar enchufado al telefono <b>antes</b> de pulsar Conectar.</li>' +
+  '<li>El cable o adaptador debe llevar datos. Muchos cables USB-C solo dan corriente.</li>' +
+  '<li>Al enchufarlo, Android pregunta si permites el acceso al dispositivo USB. ' +
+  'Hay que aceptar. Si no aparecio, desenchufa y vuelve a enchufar.</li>' +
+  '<li>Si el teclado enciende sus luces, recibe corriente, pero eso no ' +
+  'garantiza que haya datos.</li>' +
+  '</ol>' +
+  'Si aun asi no sale, pulsa <b>No aparece mi teclado</b> para ver la lista ' +
+  'completa de dispositivos USB que ve el navegador.';
+
 async function connect() {
   if (state.transport) return disconnect();
   await guard(async () => {
@@ -185,34 +209,88 @@ async function connect() {
         device = null;   // autorizado antes pero ya no responde
       }
       if (!state.transport) {
+        log('Abriendo el selector de dispositivos del navegador...');
         device = await HID.pickDevice();
-        if (!device) return;
+        if (!device) {
+          log(NOT_FOUND, true);
+          return;
+        }
         state.transport = await new HID.Transport(device).open();
       }
     }
-    state.kb = new Keyboard(state.transport);
-
-    state.config = await state.kb.getConfig();
-    state.profile = state.config.profile || 0;
-    state.layer = 0;
-
-    try {
-      state.layout = await Cat.loadLayout(state.transport.key);
-    } catch {
-      state.layout = genericLayout();
-      toast('Layout desconocido: se usa una rejilla generica');
-    }
-    state.light = await state.kb.getLight();
-    await reloadKeys();
-
-    if (device) {
-      navigator.hid.addEventListener('disconnect', (e) => {
-        if (e.device === device) disconnect(true);
-      });
-    }
-
-    renderConnected();
+    await afterOpen(device);
   }, 'la conexion');
+}
+
+/** Lectura inicial del teclado, comun a los dos caminos de conexion. */
+async function afterOpen(device) {
+  state.kb = new Keyboard(state.transport);
+
+  state.config = await state.kb.getConfig();
+  state.profile = state.config.profile || 0;
+  state.layer = 0;
+
+  try {
+    state.layout = await Cat.loadLayout(state.transport.key);
+  } catch {
+    state.layout = genericLayout();
+    toast('Layout desconocido: se usa una rejilla generica');
+  }
+  state.light = await state.kb.getLight();
+  await reloadKeys();
+
+  if (device) {
+    navigator.hid.addEventListener('disconnect', (e) => {
+      if (e.device === device) disconnect(true);
+    });
+  }
+
+  $('connectLog').classList.add('hidden');
+  renderConnected();
+}
+
+/**
+ * Selector sin filtros. Responde a la pregunta importante: el navegador no ve
+ * nada por USB, o si lo ve pero este modelo no esta en la lista conocida.
+ */
+async function scanAny() {
+  let ficha = '';
+  try {
+    log('Abriendo la lista completa de dispositivos USB...');
+    const device = await HID.pickAnyDevice();
+    if (!device) {
+      log(
+        'La lista del navegador salio vacia, asi que no llega ningun ' +
+        'dispositivo USB al telefono. El problema esta en el cable, el ' +
+        'adaptador OTG o el permiso de Android, no en la pagina.', true
+      );
+      return;
+    }
+    const d = HID.describeDevice(device);
+    const known = await HID.isKnown(device);
+    ficha =
+      `<b>${d.productName}</b><br>` +
+      `<span class="diag">VID ${d.vendorId} · PID ${d.productId}<br>` +
+      `colecciones: ${d.collections.join(', ') || 'ninguna'}</span><br><br>`;
+
+    log(ficha + (known
+      ? 'Este modelo si esta en la lista de conocidos. Conectando...'
+      : 'Este modelo no esta en la lista de VID/PID conocidos. Lo intento ' +
+        'igualmente: si responde, funciona.'), !known);
+
+    state.transport = await new HID.Transport(device).open();
+    await afterOpen(device);
+  } catch (err) {
+    if (err && err.name === 'NotFoundError') {
+      log(ficha + 'Selector cerrado sin elegir nada.', true);
+      return;
+    }
+    log(
+      ficha + `No se pudo hablar con el dispositivo: ${err.message}<br><br>` +
+      'Si los datos de arriba son los de tu teclado macro, pasamelos y lo ' +
+      'anado a la lista de modelos reconocidos.', true
+    );
+  }
 }
 
 function genericLayout() {
@@ -858,6 +936,10 @@ function switchView(name) {
 
 function wire() {
   $('connectBtn').onclick = connect;
+  $('btnAnyDevice').onclick = scanAny;
+  $('btnDemo').onclick = () => {
+    location.search = '?demo=1';
+  };
   document.querySelectorAll('.tab').forEach((t) => {
     t.onclick = () => switchView(t.dataset.view);
   });
