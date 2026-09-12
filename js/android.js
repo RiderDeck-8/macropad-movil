@@ -50,10 +50,14 @@ export async function ensurePermission(device, onWaiting) {
   return false;
 }
 
+export const WRITE_ENDPOINT = 1;
+export const WRITE_CONTROL = 2;
+
 export class AndroidTransport {
-  constructor(device, interfaceIndex) {
+  constructor(device, interfaceIndex, writeMethod = WRITE_ENDPOINT) {
     this.device = device;
     this.interfaceIndex = interfaceIndex;
+    this.writeMethod = writeMethod;
     this.vendorId = device.vendorId;
     this.productId = device.productId;
     this.productName = device.name || '';
@@ -67,7 +71,9 @@ export class AndroidTransport {
   }
 
   async open() {
-    const err = window.AndroidHid.open(this.device.id, this.interfaceIndex);
+    const err = window.AndroidHid.open(
+      this.device.id, this.interfaceIndex, this.writeMethod
+    );
     if (err) throw new Error(err.replace(/^ERR:/, ''));
     return this;
   }
@@ -129,19 +135,57 @@ async function probe(device, onStep) {
     return score(a) - score(b);
   });
 
+  // Si ninguna contesta con la cabecera esperada, vale cualquiera que conteste
+  // algo: el firmware puede enmarcar la respuesta de otra forma.
+  let fallback = null;
+
   for (const iface of candidates) {
-    if (onStep) onStep(iface);
-    const transport = new AndroidTransport(device, iface.index);
-    try {
-      await transport.open();
-      const reply = await transport.send(6, [5], 800);
-      if (reply[0] === 6 && reply[1] === 5) return transport;
-      await transport.close();
-    } catch {
-      try { await transport.close(); } catch { /* seguimos probando */ }
+    for (const method of [WRITE_ENDPOINT, WRITE_CONTROL]) {
+      if (method === WRITE_ENDPOINT && !iface.hasOut) continue;
+      if (onStep) onStep(iface, method);
+      const transport = new AndroidTransport(device, iface.index, method);
+      try {
+        await transport.open();
+        const reply = await transport.send(6, [5], 1500);
+        if (reply[0] === 6 && reply[1] === 5) return transport;
+        if (reply.some((b) => b !== 0) && !fallback) {
+          fallback = { index: iface.index, method };
+        }
+        await transport.close();
+      } catch {
+        try { await transport.close(); } catch { /* seguimos probando */ }
+      }
     }
   }
+
+  if (fallback) {
+    const transport = new AndroidTransport(device, fallback.index, fallback.method);
+    await transport.open();
+    return transport;
+  }
   return null;
+}
+
+/** Vuelca lo que contesta cada interfaz, para cuando el sondeo no acierta. */
+export function diagnose() {
+  const devices = listDevices();
+  if (!devices.length) return { error: 'Android no ve ningun dispositivo USB HID' };
+  const out = [];
+  for (const device of devices) {
+    if (!device.hasPermission) {
+      window.AndroidHid.requestPermission(device.id);
+      out.push({ device, error: 'falta aceptar el permiso USB; repite el diagnostico' });
+      continue;
+    }
+    let report;
+    try {
+      report = JSON.parse(window.AndroidHid.diagnose(device.id, '0605', 1200));
+    } catch (err) {
+      report = { error: err.message };
+    }
+    out.push({ device, report });
+  }
+  return out;
 }
 
 /**
@@ -173,11 +217,15 @@ export async function connectAndroid(report = () => {}) {
       errors.push(`${label}: permiso denegado`);
       continue;
     }
-    const transport = await probe(device);
+    const transport = await probe(device, (iface, method) =>
+      report(`${label}: probando interfaz ${iface.index} por ` +
+        `${method === WRITE_ENDPOINT ? 'endpoint' : 'control'}...`)
+    );
     if (transport) return transport;
-    errors.push(`${label}: no responde al protocolo`);
+    errors.push(`${label}: ninguna interfaz contesto`);
   }
   throw new Error(
-    'Ninguno de los dispositivos conectados respondio. ' + errors.join('. ')
+    errors.join('. ') +
+    '. Pulsa Diagnostico USB para ver que contesta cada interfaz.'
   );
 }

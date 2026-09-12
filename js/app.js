@@ -3,7 +3,7 @@ import { Keyboard, KeyType } from './protocol.js';
 import * as Cat from './catalog.js';
 import * as Mac from './macros.js';
 import { DemoTransport } from './demo.js';
-import { androidShell, connectAndroid } from './android.js';
+import { androidShell, connectAndroid, diagnose } from './android.js';
 
 const $ = (id) => document.getElementById(id);
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -96,6 +96,7 @@ function checkSupport() {
       'Enchufa el teclado por USB-C (OTG), pulsa Conectar y acepta el permiso ' +
       'que pide Android.';
     $('btnAnyDevice').hidden = true;
+    $('btnUsbDiag').hidden = false;
     return true;
   }
   $('btnAnyDevice').hidden = !HID.hidSupported();
@@ -304,6 +305,38 @@ async function scanAny() {
       'anado a la lista de modelos reconocidos.', true
     );
   }
+}
+
+/** Vuelca en pantalla lo que contesta cada interfaz del teclado. */
+function runDiagnose() {
+  log('Probando todas las interfaces...');
+  const result = diagnose();
+  if (result.error) {
+    log(result.error, true);
+    return;
+  }
+  const hex = (n) => n.toString(16).padStart(4, '0');
+  const lines = [];
+  for (const { device, report, error } of result) {
+    lines.push(`<b>${device.name}</b> ${hex(device.vendorId)}:${hex(device.productId)}`);
+    if (error) { lines.push(error); continue; }
+    if (report.error) { lines.push(report.error); continue; }
+    for (const iface of report) {
+      const eps = (iface.endpoints || [])
+        .map((e) => `${e.dir} 0x${e.address.toString(16)} tipo ${e.type} ${e.packetSize}b`)
+        .join(', ');
+      lines.push(
+        `if ${iface.index} · clase ${iface.class} sub ${iface.subclass} ` +
+        `proto ${iface.protocol}<br>&nbsp;&nbsp;${eps || 'sin endpoints'}`
+      );
+      if (iface.skip) { lines.push(`&nbsp;&nbsp;omitida: ${iface.skip}`); continue; }
+      if (iface.claimed === false) { lines.push('&nbsp;&nbsp;no se pudo reclamar'); continue; }
+      for (const t of iface.tries || []) {
+        lines.push(`&nbsp;&nbsp;${t.method}: enviados ${t.sent} → ${t.reply || t.result}`);
+      }
+    }
+  }
+  log('<span class="diag">' + lines.join('<br>') + '</span>');
 }
 
 function genericLayout() {
@@ -950,6 +983,7 @@ function switchView(name) {
 function wire() {
   $('connectBtn').onclick = connect;
   $('btnAnyDevice').onclick = scanAny;
+  $('btnUsbDiag').onclick = runDiagnose;
   $('btnDemo').onclick = () => {
     location.search = '?demo=1';
   };
