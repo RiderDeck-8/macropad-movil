@@ -50,14 +50,20 @@ export async function ensurePermission(device, onWaiting) {
   return false;
 }
 
-export const WRITE_ENDPOINT = 1;
-export const WRITE_CONTROL = 2;
+// Formas de mover un reporte por USB. Cual funciona depende del teclado y del
+// telefono, asi que se prueban todas y se recuerda la que conteste.
+export const STRATEGIES = [
+  { id: 1, name: 'bulk + lectura encolada', needsOut: true },
+  { id: 2, name: 'request + lectura encolada', needsOut: true },
+  { id: 3, name: 'bulk + bulk', needsOut: true },
+  { id: 4, name: 'control + bulk', needsOut: false },
+];
 
 export class AndroidTransport {
-  constructor(device, interfaceIndex, writeMethod = WRITE_ENDPOINT) {
+  constructor(device, interfaceIndex, strategy = 1) {
     this.device = device;
     this.interfaceIndex = interfaceIndex;
-    this.writeMethod = writeMethod;
+    this.strategy = strategy;
     this.vendorId = device.vendorId;
     this.productId = device.productId;
     this.productName = device.name || '';
@@ -72,7 +78,7 @@ export class AndroidTransport {
 
   async open() {
     const err = window.AndroidHid.open(
-      this.device.id, this.interfaceIndex, this.writeMethod
+      this.device.id, this.interfaceIndex, this.strategy
     );
     if (err) throw new Error(err.replace(/^ERR:/, ''));
     return this;
@@ -140,16 +146,16 @@ async function probe(device, onStep) {
   let fallback = null;
 
   for (const iface of candidates) {
-    for (const method of [WRITE_ENDPOINT, WRITE_CONTROL]) {
-      if (method === WRITE_ENDPOINT && !iface.hasOut) continue;
-      if (onStep) onStep(iface, method);
-      const transport = new AndroidTransport(device, iface.index, method);
+    for (const s of STRATEGIES) {
+      if (s.needsOut && !iface.hasOut) continue;
+      if (onStep) onStep(iface, s);
+      const transport = new AndroidTransport(device, iface.index, s.id);
       try {
         await transport.open();
         const reply = await transport.send(6, [5], 1500);
         if (reply[0] === 6 && reply[1] === 5) return transport;
         if (reply.some((b) => b !== 0) && !fallback) {
-          fallback = { index: iface.index, method };
+          fallback = { index: iface.index, strategy: s.id };
         }
         await transport.close();
       } catch {
@@ -159,7 +165,7 @@ async function probe(device, onStep) {
   }
 
   if (fallback) {
-    const transport = new AndroidTransport(device, fallback.index, fallback.method);
+    const transport = new AndroidTransport(device, fallback.index, fallback.strategy);
     await transport.open();
     return transport;
   }
@@ -217,9 +223,8 @@ export async function connectAndroid(report = () => {}) {
       errors.push(`${label}: permiso denegado`);
       continue;
     }
-    const transport = await probe(device, (iface, method) =>
-      report(`${label}: probando interfaz ${iface.index} por ` +
-        `${method === WRITE_ENDPOINT ? 'endpoint' : 'control'}...`)
+    const transport = await probe(device, (iface, s) =>
+      report(`${label}: interfaz ${iface.index}, ${s.name}...`)
     );
     if (transport) return transport;
     errors.push(`${label}: ninguna interfaz contesto`);

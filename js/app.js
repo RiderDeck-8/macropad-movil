@@ -332,7 +332,7 @@ function runDiagnose() {
       if (iface.skip) { lines.push(`&nbsp;&nbsp;omitida: ${iface.skip}`); continue; }
       if (iface.claimed === false) { lines.push('&nbsp;&nbsp;no se pudo reclamar'); continue; }
       for (const t of iface.tries || []) {
-        lines.push(`&nbsp;&nbsp;${t.method}: enviados ${t.sent} → ${t.reply || t.result}`);
+        lines.push(`&nbsp;&nbsp;${t.name}: ${t.reply}`);
       }
     }
   }

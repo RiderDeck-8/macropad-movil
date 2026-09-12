@@ -26,9 +26,9 @@ import java.nio.ByteBuffer
  * la app la tiene reclamada. Eso es lo que WebHID no puede hacer todavia en
  * Chrome para Android.
  *
- * Los metodos son sincronos a proposito: WebView los ejecuta en un hilo propio,
- * asi que pueden bloquear sin congelar la interfaz. Los datos viajan como
- * cadenas hexadecimales para no complicar el puente.
+ * No hay una sola forma correcta de mover reportes por USB en Android, y cual
+ * funciona depende del teclado y del telefono. Por eso el puente implementa
+ * varias estrategias y deja que el lado web pruebe cual responde.
  */
 class UsbHidBridge(private val context: Context) {
 
@@ -36,17 +36,29 @@ class UsbHidBridge(private val context: Context) {
         private const val ACTION_PERMISSION = "com.riderdeck.macropad.USB_PERMISSION"
         private const val REPORT_SIZE = 64
 
-        /** SET_REPORT de la clase HID, para interfaces sin endpoint de salida. */
         private const val HID_SET_REPORT = 0x09
-        private const val HID_GET_REPORT = 0x01
+        private const val HID_SET_IDLE = 0x0A
         private const val HID_OUT_REQUEST_TYPE = 0x21
-        private const val HID_IN_REQUEST_TYPE = 0xA1
         private const val HID_OUTPUT_REPORT = 0x0200
-        private const val HID_INPUT_REPORT = 0x0100
 
-        /** Formas de escribir un reporte, por orden de preferencia. */
-        const val WRITE_ENDPOINT = 1
-        const val WRITE_CONTROL = 2
+        /**
+         * Combinaciones de escritura y lectura, por orden de preferencia.
+         *
+         * Las variantes "encolada" piden la lectura ANTES de escribir. Con
+         * endpoints de interrupcion esa es la forma correcta: si se escribe
+         * primero, la respuesta puede llegar antes de que nadie escuche.
+         */
+        const val S_BULK_QUEUED = 1     // escribe con bulkTransfer, lectura encolada
+        const val S_REQ_QUEUED = 2      // escribe con UsbRequest, lectura encolada
+        const val S_BULK_BULK = 3       // todo con bulkTransfer
+        const val S_CONTROL_BULK = 4    // escribe con SET_REPORT de control
+
+        private val STRATEGY_NAMES = mapOf(
+            S_BULK_QUEUED to "bulk + lectura encolada",
+            S_REQ_QUEUED to "request + lectura encolada",
+            S_BULK_BULK to "bulk + bulk",
+            S_CONTROL_BULK to "control + bulk"
+        )
     }
 
     private val manager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -56,7 +68,7 @@ class UsbHidBridge(private val context: Context) {
     private var endpointIn: UsbEndpoint? = null
     private var endpointOut: UsbEndpoint? = null
     private var interfaceNumber = 0
-    private var writeMethod = WRITE_ENDPOINT
+    private var strategy = S_BULK_QUEUED
 
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) { /* se consulta con devices() */ }
@@ -87,9 +99,7 @@ class UsbHidBridge(private val context: Context) {
             for (i in 0 until device.interfaceCount) {
                 val iface = device.getInterface(i)
                 if (iface.interfaceClass != UsbConstants.USB_CLASS_HID) continue
-                val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)
-                val outEp = firstEndpoint(iface, UsbConstants.USB_DIR_OUT)
-                if (inEp == null) continue
+                val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN) ?: continue
                 interfaces.put(
                     JSONObject()
                         .put("index", i)
@@ -97,7 +107,7 @@ class UsbHidBridge(private val context: Context) {
                         .put("subclass", iface.interfaceSubclass)
                         .put("protocol", iface.interfaceProtocol)
                         .put("packetSize", inEp.maxPacketSize)
-                        .put("hasOut", outEp != null)
+                        .put("hasOut", firstEndpoint(iface, UsbConstants.USB_DIR_OUT) != null)
                 )
             }
             if (interfaces.length() == 0) continue
@@ -133,9 +143,8 @@ class UsbHidBridge(private val context: Context) {
 
     // -------------------------------------------------------------- conexion
 
-    /** Reclama una interfaz HID, apartando al driver del sistema si hace falta. */
     @JavascriptInterface
-    fun open(deviceId: Int, interfaceIndex: Int, method: Int): String {
+    fun open(deviceId: Int, interfaceIndex: Int, strategyId: Int): String {
         close()
         val device = findDevice(deviceId) ?: return "ERR:dispositivo no encontrado"
         if (!manager.hasPermission(device)) return "ERR:sin permiso de Android"
@@ -147,6 +156,7 @@ class UsbHidBridge(private val context: Context) {
             conn.close()
             return "ERR:otra cosa tiene tomada la interfaz"
         }
+        settle(conn, iface)
 
         val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)
         if (inEp == null) {
@@ -160,7 +170,7 @@ class UsbHidBridge(private val context: Context) {
         endpointIn = inEp
         endpointOut = firstEndpoint(iface, UsbConstants.USB_DIR_OUT)
         interfaceNumber = iface.id
-        writeMethod = if (method == WRITE_CONTROL || endpointOut == null) WRITE_CONTROL else WRITE_ENDPOINT
+        strategy = if (endpointOut == null) S_CONTROL_BULK else strategyId
         return ""
     }
 
@@ -179,45 +189,50 @@ class UsbHidBridge(private val context: Context) {
 
     // ------------------------------------------------------------ transferencia
 
-    @JavascriptInterface
-    fun write(hex: String): String {
-        val conn = connection ?: return "ERR:sin conexion"
-        val data = hexToBytes(hex, REPORT_SIZE) ?: return "ERR:datos invalidos"
-        val sent = writeReport(conn, endpointOut, interfaceNumber, data, writeMethod)
-        return if (sent < 0) "ERR:fallo al escribir" else ""
-    }
-
-    @JavascriptInterface
-    fun read(timeoutMs: Int): String {
-        val conn = connection ?: return "ERR:sin conexion"
-        val ep = endpointIn ?: return "ERR:sin endpoint"
-        return readReport(conn, ep, timeoutMs)
-    }
-
-    /** Escribe y espera respuesta, que es el caso habitual. */
+    /** Escribe y espera respuesta. Devuelve el hexadecimal o "ERR:...". */
     @JavascriptInterface
     fun transfer(hex: String, timeoutMs: Int): String {
-        val wrote = write(hex)
-        if (wrote.isNotEmpty()) return wrote
+        val conn = connection ?: return "ERR:sin conexion"
+        val inEp = endpointIn ?: return "ERR:sin endpoint de entrada"
+        val data = hexToBytes(hex, REPORT_SIZE) ?: return "ERR:datos invalidos"
+
         val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            val left = (deadline - System.currentTimeMillis()).toInt().coerceAtLeast(1)
-            val reply = read(left)
+        while (true) {
+            val left = (deadline - System.currentTimeMillis()).toInt()
+            if (left <= 0) return "ERR:el teclado no respondio"
+            val reply = exchange(conn, interfaceNumber, inEp, endpointOut, data, left, strategy)
             if (reply.startsWith("ERR:")) return reply
-            if (reply.isEmpty()) continue
+            if (reply.isEmpty()) return "ERR:el teclado no respondio"
             // AA FA son avisos de luz que el teclado manda solo, no respuestas.
             if (reply.startsWith("aafa")) continue
             return reply
         }
-        return "ERR:el teclado no respondio"
+    }
+
+    /** Escribe sin esperar respuesta. */
+    @JavascriptInterface
+    fun write(hex: String): String {
+        val conn = connection ?: return "ERR:sin conexion"
+        val data = hexToBytes(hex, REPORT_SIZE) ?: return "ERR:datos invalidos"
+        val out = endpointOut
+        val sent = if (out != null && strategy != S_CONTROL_BULK) {
+            if (strategy == S_REQ_QUEUED) writeWithRequest(conn, out, data)
+            else conn.bulkTransfer(out, data, data.size, 1000)
+        } else {
+            conn.controlTransfer(
+                HID_OUT_REQUEST_TYPE, HID_SET_REPORT, HID_OUTPUT_REPORT,
+                interfaceNumber, data, data.size, 1000
+            )
+        }
+        return if (sent < 0) "ERR:fallo al escribir" else ""
     }
 
     // ------------------------------------------------------------- diagnostico
 
     /**
-     * Recorre todas las interfaces HID y prueba las dos formas de escribir,
-     * devolviendo lo que conteste cada una en crudo. Es la herramienta para
-     * averiguar que interfaz entiende el protocolo cuando el sondeo falla.
+     * Recorre las interfaces HID y prueba todas las estrategias en cada una,
+     * devolviendo en crudo lo que conteste. Con eso se ve cual entiende el
+     * protocolo y por que via hay que hablarle.
      */
     @JavascriptInterface
     fun diagnose(deviceId: Int, probeHex: String, timeoutMs: Int): String {
@@ -227,6 +242,8 @@ class UsbHidBridge(private val context: Context) {
         if (!manager.hasPermission(device)) {
             return JSONObject().put("error", "sin permiso de Android").toString()
         }
+        val data = hexToBytes(probeHex, REPORT_SIZE)
+            ?: return JSONObject().put("error", "sonda invalida").toString()
 
         val report = JSONArray()
         for (i in 0 until device.interfaceCount) {
@@ -251,14 +268,9 @@ class UsbHidBridge(private val context: Context) {
             }
             entry.put("endpoints", eps)
 
-            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID) {
-                entry.put("skip", "no es HID")
-                report.put(entry)
-                continue
-            }
             val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)
-            if (inEp == null) {
-                entry.put("skip", "sin endpoint de entrada")
+            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID || inEp == null) {
+                entry.put("skip", "sin interfaz HID utilizable")
                 report.put(entry)
                 continue
             }
@@ -276,25 +288,19 @@ class UsbHidBridge(private val context: Context) {
                 report.put(entry)
                 continue
             }
+            settle(conn, iface)
 
-            val data = hexToBytes(probeHex, REPORT_SIZE)
             val outEp = firstEndpoint(iface, UsbConstants.USB_DIR_OUT)
             val tries = JSONArray()
-            for (method in intArrayOf(WRITE_ENDPOINT, WRITE_CONTROL)) {
-                if (method == WRITE_ENDPOINT && outEp == null) continue
-                val t = JSONObject().put("method", if (method == WRITE_ENDPOINT) "endpoint" else "control")
-                if (data == null) {
-                    t.put("result", "sonda invalida")
-                } else {
-                    val sent = writeReport(conn, outEp, iface.id, data, method)
-                    t.put("sent", sent)
-                    if (sent >= 0) {
-                        // Sin filtrar: interesa ver todo lo que llega, avisos incluidos.
-                        val reply = readReport(conn, inEp, timeoutMs)
-                        t.put("reply", if (reply.isEmpty()) "sin respuesta" else reply)
-                    }
-                }
-                tries.put(t)
+            for (s in intArrayOf(S_BULK_QUEUED, S_REQ_QUEUED, S_BULK_BULK, S_CONTROL_BULK)) {
+                if (s != S_CONTROL_BULK && outEp == null) continue
+                val reply = exchange(conn, iface.id, inEp, outEp, data, timeoutMs, s)
+                tries.put(
+                    JSONObject()
+                        .put("strategy", s)
+                        .put("name", STRATEGY_NAMES[s])
+                        .put("reply", if (reply.isEmpty()) "sin respuesta" else reply)
+                )
             }
             entry.put("tries", tries)
 
@@ -305,31 +311,81 @@ class UsbHidBridge(private val context: Context) {
         return report.toString()
     }
 
-    // ------------------------------------------------------------------ utiles
+    // ---------------------------------------------------------------- interno
 
-    private fun firstEndpoint(iface: UsbInterface, direction: Int): UsbEndpoint? {
-        for (e in 0 until iface.endpointCount) {
-            val ep = iface.getEndpoint(e)
-            if (ep.direction == direction) return ep
+    /**
+     * Un intercambio completo con la estrategia indicada. Devuelve el
+     * hexadecimal de la respuesta, "" si no llego nada, o "ERR:..." si fallo
+     * la escritura.
+     */
+    private fun exchange(
+        conn: UsbDeviceConnection, ifaceNumber: Int, inEp: UsbEndpoint, outEp: UsbEndpoint?,
+        data: ByteArray, timeoutMs: Int, strategyId: Int
+    ): String {
+        val size = maxOf(inEp.maxPacketSize, REPORT_SIZE)
+
+        if (strategyId == S_BULK_BULK || strategyId == S_CONTROL_BULK) {
+            val sent = if (strategyId == S_BULK_BULK && outEp != null) {
+                conn.bulkTransfer(outEp, data, data.size, 1000)
+            } else {
+                conn.controlTransfer(
+                    HID_OUT_REQUEST_TYPE, HID_SET_REPORT, HID_OUTPUT_REPORT,
+                    ifaceNumber, data, data.size, 1000
+                )
+            }
+            if (sent < 0) return "ERR:fallo al escribir"
+            val buffer = ByteArray(size)
+            val n = conn.bulkTransfer(inEp, buffer, size, timeoutMs)
+            return if (n > 0) bytesToHex(buffer, n) else ""
         }
-        return null
+
+        // Estrategias con la lectura encolada antes de escribir.
+        if (outEp == null) return "ERR:sin endpoint de salida"
+        val read = UsbRequest()
+        return try {
+            if (!read.initialize(conn, inEp)) return "ERR:no se pudo preparar la lectura"
+            val buffer = ByteBuffer.allocateDirect(size)
+            if (!read.queue(buffer)) return "ERR:no se pudo encolar la lectura"
+
+            val sent = if (strategyId == S_REQ_QUEUED) {
+                writeWithRequest(conn, outEp, data)
+            } else {
+                conn.bulkTransfer(outEp, data, data.size, 1000)
+            }
+            if (sent < 0) {
+                runCatching { read.cancel() }
+                return "ERR:fallo al escribir"
+            }
+            awaitRequest(conn, read, buffer, timeoutMs)
+        } catch (e: Exception) {
+            "ERR:${e.javaClass.simpleName}"
+        } finally {
+            runCatching { read.close() }
+        }
     }
 
-    private fun writeReport(
-        conn: UsbDeviceConnection, out: UsbEndpoint?, ifaceNumber: Int,
-        data: ByteArray, method: Int
-    ): Int {
-        if (method == WRITE_ENDPOINT && out != null) {
-            val n = conn.bulkTransfer(out, data, data.size, 1000)
-            if (n >= 0) return n
-            // Algunos telefonos no mueven endpoints de interrupcion con
-            // bulkTransfer; UsbRequest es la via correcta para ese tipo.
-            return writeWithRequest(conn, out, data)
+    /** Espera a que termine la peticion indicada, ignorando las demas. */
+    private fun awaitRequest(
+        conn: UsbDeviceConnection, expected: UsbRequest, buffer: ByteBuffer, timeoutMs: Int
+    ): String {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val left = (deadline - System.currentTimeMillis()).coerceAtLeast(1L)
+            val done = try {
+                conn.requestWait(left)
+            } catch (e: Exception) {
+                null
+            } ?: break
+            if (done !== expected) continue
+            val length = buffer.position()
+            if (length <= 0) return ""
+            val bytes = ByteArray(length)
+            buffer.rewind()
+            buffer.get(bytes)
+            return bytesToHex(bytes, length)
         }
-        return conn.controlTransfer(
-            HID_OUT_REQUEST_TYPE, HID_SET_REPORT, HID_OUTPUT_REPORT,
-            ifaceNumber, data, data.size, 1000
-        )
+        runCatching { expected.cancel() }
+        return ""
     }
 
     private fun writeWithRequest(
@@ -340,46 +396,34 @@ class UsbHidBridge(private val context: Context) {
             if (!request.initialize(conn, out)) return -1
             val buffer = ByteBuffer.allocateDirect(data.size)
             buffer.put(data)
+            buffer.rewind()
             if (!request.queue(buffer)) return -1
-            val done = conn.requestWait(1000)
-            if (done == null) -1 else data.size
+            data.size
         } catch (e: Exception) {
             -1
         } finally {
-            runCatching { request.close() }
+            // No se cierra aqui: la peticion se resuelve en el requestWait de
+            // la lectura, que descarta las que no son suyas.
         }
     }
 
-    private fun readReport(conn: UsbDeviceConnection, ep: UsbEndpoint, timeoutMs: Int): String {
-        val size = maxOf(ep.maxPacketSize, REPORT_SIZE)
-        val buffer = ByteArray(size)
-        val n = conn.bulkTransfer(ep, buffer, size, timeoutMs)
-        if (n > 0) return bytesToHex(buffer, n)
-        if (n == 0) return ""
-        return readWithRequest(conn, ep, size, timeoutMs)
+    /**
+     * Da un respiro al firmware tras apartar al driver del sistema y le manda
+     * SET_IDLE, que algunos teclados necesitan para empezar a enviar reportes.
+     */
+    private fun settle(conn: UsbDeviceConnection, iface: UsbInterface) {
+        runCatching {
+            conn.controlTransfer(HID_OUT_REQUEST_TYPE, HID_SET_IDLE, 0, iface.id, null, 0, 500)
+        }
+        runCatching { Thread.sleep(120) }
     }
 
-    private fun readWithRequest(
-        conn: UsbDeviceConnection, ep: UsbEndpoint, size: Int, timeoutMs: Int
-    ): String {
-        val request = UsbRequest()
-        return try {
-            if (!request.initialize(conn, ep)) return ""
-            val buffer = ByteBuffer.allocateDirect(size)
-            if (!request.queue(buffer)) return ""
-            val done = conn.requestWait(timeoutMs.toLong().coerceAtLeast(1L)) ?: return ""
-            if (done !== request) return ""
-            val length = buffer.position()
-            if (length <= 0) return ""
-            val bytes = ByteArray(length)
-            buffer.rewind()
-            buffer.get(bytes)
-            bytesToHex(bytes, length)
-        } catch (e: Exception) {
-            ""
-        } finally {
-            runCatching { request.close() }
+    private fun firstEndpoint(iface: UsbInterface, direction: Int): UsbEndpoint? {
+        for (e in 0 until iface.endpointCount) {
+            val ep = iface.getEndpoint(e)
+            if (ep.direction == direction) return ep
         }
+        return null
     }
 
     private fun findDevice(deviceId: Int): UsbDevice? =
