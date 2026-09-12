@@ -247,6 +247,108 @@ class UsbHidBridge(private val context: Context) {
         }
     }
 
+    /**
+     * Prueba a fondo, interfaz por interfaz. Para cada una: reclamar, pedir el
+     * descriptor comun, escuchar sin escribir nada mientras el usuario pulsa
+     * teclas, y solo despues escribir la sonda y volver a escuchar.
+     *
+     * Escuchar sin escribir es lo que decide: si por la interfaz del teclado
+     * llegan bytes al pulsar, la lectura funciona y el fallo esta en el
+     * dialogo con la interfaz propietaria. Si no llega nada por ninguna, lo
+     * que esta roto es el transporte.
+     */
+    @JavascriptInterface
+    fun deepTest(deviceId: Int, probeHex: String, listenMs: Int): String =
+        onUsb { deepTestImpl(deviceId, probeHex, listenMs) }
+
+    private fun deepTestImpl(deviceId: Int, probeHex: String, listenMs: Int): String {
+        closeImpl()
+        val out = JSONObject()
+        val device = findDevice(deviceId)
+            ?: return out.put("error", "dispositivo no encontrado").toString()
+        if (!manager.hasPermission(device)) {
+            return out.put("error", "sin permiso de Android").toString()
+        }
+        val data = hexToBytes(probeHex, REPORT_SIZE)
+            ?: return out.put("error", "sonda invalida").toString()
+
+        val results = JSONArray()
+        for (i in 0 until device.interfaceCount) {
+            val iface = device.getInterface(i)
+            val inEp = firstEndpoint(iface, UsbConstants.USB_DIR_IN)
+            val entry = JSONObject()
+                .put("iface", iface.id)
+                .put("subclass", iface.interfaceSubclass)
+            if (iface.interfaceClass != UsbConstants.USB_CLASS_HID || inEp == null) {
+                entry.put("skip", "sin interfaz HID utilizable")
+                results.put(entry)
+                continue
+            }
+
+            val conn = manager.openDevice(device)
+            if (conn == null) {
+                entry.put("error", "no abre")
+                results.put(entry)
+                continue
+            }
+            try {
+                var how = "normal"
+                var ok = conn.claimInterface(iface, false)
+                if (!ok) {
+                    how = "forzada"
+                    ok = conn.claimInterface(iface, true)
+                }
+                entry.put("claim", if (ok) how else "fallo")
+                if (!ok) continue
+
+                val buf = ByteArray(18)
+                val n = conn.controlTransfer(
+                    DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0,
+                    buf, buf.size, 2000
+                )
+                entry.put("control", if (n > 0) "ok" else "fallo ($n)")
+
+                // 1. Escuchar sin escribir nada.
+                entry.put("escucha", readRaw(conn, inEp, listenMs))
+
+                // 2. Escribir la sonda y volver a escuchar.
+                val outEp = firstEndpoint(iface, UsbConstants.USB_DIR_OUT)
+                if (outEp != null) {
+                    val sent = conn.bulkTransfer(outEp, data, data.size, 1000)
+                    entry.put("escrito", sent)
+                    entry.put("respuesta", readRaw(conn, inEp, listenMs))
+                } else {
+                    val sent = conn.controlTransfer(
+                        HID_OUT_REQUEST_TYPE, HID_SET_REPORT, HID_OUTPUT_REPORT,
+                        iface.id, data, data.size, 1000
+                    )
+                    entry.put("escrito", "control $sent")
+                    if (sent >= 0) entry.put("respuesta", readRaw(conn, inEp, listenMs))
+                }
+                conn.releaseInterface(iface)
+            } catch (e: Exception) {
+                entry.put("error", e.javaClass.simpleName)
+            } finally {
+                runCatching { conn.close() }
+                results.put(entry)
+            }
+        }
+        out.put("interfaces", results)
+        return out.toString()
+    }
+
+    /** Lee del endpoint distinguiendo "nada" de "error". */
+    private fun readRaw(conn: UsbDeviceConnection, ep: UsbEndpoint, timeoutMs: Int): String {
+        val size = maxOf(ep.maxPacketSize, REPORT_SIZE)
+        val buffer = ByteArray(size)
+        val n = conn.bulkTransfer(ep, buffer, size, timeoutMs)
+        return when {
+            n > 0 -> bytesToHex(buffer, n)
+            n == 0 -> "vacio"
+            else -> "nada ($n)"
+        }
+    }
+
     // -------------------------------------------------------------- conexion
 
     @JavascriptInterface

@@ -173,6 +173,25 @@ async function probe(device, onStep) {
 }
 
 /**
+ * Prueba a fondo: recorre todas las interfaces y, en cada una, escucha antes
+ * de escribir. El usuario debe estar pulsando teclas mientras corre.
+ */
+export function deepTest(listenMs = 2500) {
+  const devices = listDevices();
+  if (!devices.length) return { error: 'Android no ve ningun dispositivo USB HID' };
+  const device = devices[0];
+  if (!device.hasPermission) {
+    window.AndroidHid.requestPermission(device.id);
+    return { error: 'falta aceptar el permiso USB; repite la prueba' };
+  }
+  try {
+    return { device, report: JSON.parse(window.AndroidHid.deepTest(device.id, '0605', listenMs)) };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+/**
  * Informe completo: descriptores sobre una conexion limpia y despues los
  * intentos de dialogo con la interfaz propietaria. No toca las interfaces del
  * teclado, porque apartarlas a la fuerza puede tumbar la conexion entera.

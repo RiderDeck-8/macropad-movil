@@ -3,7 +3,7 @@ import { Keyboard, KeyType } from './protocol.js';
 import * as Cat from './catalog.js';
 import * as Mac from './macros.js';
 import { DemoTransport } from './demo.js';
-import { androidShell, connectAndroid, diagnose } from './android.js';
+import { androidShell, connectAndroid, diagnose, deepTest } from './android.js';
 
 const $ = (id) => document.getElementById(id);
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -97,6 +97,7 @@ function checkSupport() {
       'que pide Android.';
     $('btnAnyDevice').hidden = true;
     $('btnUsbDiag').hidden = false;
+    $('btnDeep').hidden = false;
     return true;
   }
   $('btnAnyDevice').hidden = !HID.hidSupported();
@@ -311,6 +312,31 @@ async function scanAny() {
       'anado a la lista de modelos reconocidos.', true
     );
   }
+}
+
+/**
+ * Prueba a fondo. La clave es la linea "escucha": son los bytes que manda el
+ * teclado por su cuenta al pulsar una tecla, sin que le pidamos nada.
+ */
+function runDeep() {
+  log(
+    '<b>Pulsa las teclas del macropad sin parar</b> y gira la rueda durante ' +
+    'los proximos segundos. La pantalla se quedara quieta mientras escucha.'
+  );
+  setTimeout(() => {
+    const r = deepTest(2500);
+    if (r.error) { log(r.error, true); return; }
+    const lines = [`<b>${r.device.name}</b>`];
+    for (const i of r.report.interfaces || []) {
+      lines.push(`if ${i.iface} · sub ${i.subclass} · toma ${i.claim || i.skip || i.error}`);
+      if (i.control) lines.push(`&nbsp;&nbsp;control: ${i.control}`);
+      if (i.escucha) lines.push(`&nbsp;&nbsp;<b>escucha: ${i.escucha}</b>`);
+      if (i.escrito !== undefined) lines.push(`&nbsp;&nbsp;escrito: ${i.escrito}`);
+      if (i.respuesta) lines.push(`&nbsp;&nbsp;respuesta: ${i.respuesta}`);
+    }
+    if (r.report.error) lines.push(r.report.error);
+    log('<span class="diag">' + lines.join('<br>') + '</span>');
+  }, 1400);
 }
 
 /** Vuelca en pantalla el estado del canal USB y lo que contesta el teclado. */
@@ -1002,6 +1028,7 @@ function wire() {
   $('connectBtn').onclick = connect;
   $('btnAnyDevice').onclick = scanAny;
   $('btnUsbDiag').onclick = runDiagnose;
+  $('btnDeep').onclick = runDeep;
   $('btnDemo').onclick = () => {
     location.search = '?demo=1';
   };
