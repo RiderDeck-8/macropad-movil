@@ -16,6 +16,9 @@ on:
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -48,3 +51,15 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
           retention-days: 90
+
+      # Una release da un enlace directo al .apk. El artefacto de Actions se
+      # descarga como zip, que en un telefono es incomodo de abrir.
+      - name: Publicar en la release "ultima"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ultima --yes --cleanup-tag || true
+          gh release create ultima out/*.apk \
+            --title "Ultima compilacion" \
+            --notes "APK de depuracion compilado desde ${GITHUB_SHA::7}. Instalalo en el telefono, enchufa el teclado por USB-C (OTG) y acepta el permiso que pide Android." \
+            --prerelease
