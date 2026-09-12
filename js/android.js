@@ -188,12 +188,18 @@ export function diagnose() {
       continue;
     }
     let report;
+    let threads;
+    try {
+      threads = JSON.parse(window.AndroidHid.threadTest(device.id));
+    } catch (err) {
+      threads = { error: err.message };
+    }
     try {
       report = JSON.parse(window.AndroidHid.diagnose(device.id, '0605', 1500));
     } catch (err) {
       report = { error: err.message };
     }
-    out.push({ device, report });
+    out.push({ device, report, threads });
   }
   return out;
 }

@@ -321,8 +321,14 @@ function runDiagnose() {
     if (result.error) { log(result.error, true); return; }
     const hex = (n) => n.toString(16).padStart(4, '0');
     const lines = [];
-    for (const { device, report } of result) {
+    for (const { device, report, threads } of result) {
       lines.push(`<b>${device.name}</b> ${hex(device.vendorId)}:${hex(device.productId)}`);
+      if (threads) {
+        lines.push(
+          `hilos → puente: ${threads.puente || threads.error} · ` +
+          `propio: ${threads.hiloPropio || '-'} · nuevo: ${threads.hiloNuevo || '-'}`
+        );
+      }
       if (report.error) { lines.push(report.error); continue; }
       lines.push(
         `${report.modelo} · Android ${report.android} · ` +

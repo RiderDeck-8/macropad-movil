@@ -17,6 +17,8 @@ import android.webkit.JavascriptInterface
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 
 /**
  * Puente USB expuesto a la pagina web como `window.AndroidHid`.
@@ -85,6 +87,17 @@ class UsbHidBridge(private val context: Context) {
         override fun onReceive(ctx: Context?, intent: Intent?) { /* se consulta con devices() */ }
     }
 
+    /**
+     * Hilo propio para todo el trafico USB. WebView llama a estos metodos desde
+     * su hilo puente, que no es buen sitio para operaciones bloqueantes largas:
+     * una transferencia interrumpida se reporta como error sin mas.
+     */
+    private val usbExec = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "usb-hid").apply { isDaemon = true }
+    }
+
+    private fun <T> onUsb(block: () -> T): T = usbExec.submit(Callable { block() }).get()
+
     fun register() {
         val filter = IntentFilter(ACTION_PERMISSION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -97,7 +110,8 @@ class UsbHidBridge(private val context: Context) {
 
     fun unregister() {
         runCatching { context.unregisterReceiver(permissionReceiver) }
-        close()
+        runCatching { close() }
+        usbExec.shutdownNow()
     }
 
     // ------------------------------------------------------------- enumeracion
@@ -159,8 +173,10 @@ class UsbHidBridge(private val context: Context) {
      * intento de tomar interfaces molesta al teclado y puede tumbarlo.
      */
     @JavascriptInterface
-    fun health(deviceId: Int): String {
-        close()
+    fun health(deviceId: Int): String = onUsb { healthImpl(deviceId) }
+
+    private fun healthImpl(deviceId: Int): String {
+        closeImpl()
         val device = findDevice(deviceId) ?: return "ERR:dispositivo no encontrado"
         if (!manager.hasPermission(device)) return "ERR:sin permiso de Android"
         val conn = manager.openDevice(device) ?: return "ERR:no se pudo abrir el dispositivo"
@@ -176,11 +192,54 @@ class UsbHidBridge(private val context: Context) {
         }
     }
 
+    /**
+     * Prueba diferencial: la misma peticion estandar desde tres hilos
+     * distintos. Si funciona en unos y en otros no, el problema es donde se
+     * ejecuta, no el USB.
+     */
+    @JavascriptInterface
+    fun threadTest(deviceId: Int): String {
+        close()
+        val out = JSONObject()
+        val device = findDevice(deviceId)
+            ?: return out.put("error", "dispositivo no encontrado").toString()
+        if (!manager.hasPermission(device)) {
+            return out.put("error", "sin permiso de Android").toString()
+        }
+        out.put("puente", probeOnce(device))
+        out.put("hiloPropio", onUsb { probeOnce(device) })
+        var fresh = "no ejecutado"
+        val t = Thread { fresh = probeOnce(device) }
+        t.start()
+        t.join(8000)
+        out.put("hiloNuevo", fresh)
+        return out.toString()
+    }
+
+    /** Abre, pide el descriptor de dispositivo y cierra. Nada mas. */
+    private fun probeOnce(device: UsbDevice): String {
+        val conn = manager.openDevice(device) ?: return "no abre"
+        return try {
+            val buf = ByteArray(18)
+            val n = conn.controlTransfer(
+                DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0, buf, buf.size, 2000
+            )
+            if (n > 0) "ok " + bytesToHex(buf, n) else "fallo ($n)"
+        } catch (e: Exception) {
+            "excepcion ${e.javaClass.simpleName}"
+        } finally {
+            runCatching { conn.close() }
+        }
+    }
+
     // -------------------------------------------------------------- conexion
 
     @JavascriptInterface
-    fun open(deviceId: Int, interfaceIndex: Int, strategyId: Int): String {
-        close()
+    fun open(deviceId: Int, interfaceIndex: Int, strategyId: Int): String =
+        onUsb { openImpl(deviceId, interfaceIndex, strategyId) }
+
+    private fun openImpl(deviceId: Int, interfaceIndex: Int, strategyId: Int): String {
+        closeImpl()
         val device = findDevice(deviceId) ?: return "ERR:dispositivo no encontrado"
         if (!manager.hasPermission(device)) return "ERR:sin permiso de Android"
         if (interfaceIndex >= device.interfaceCount) return "ERR:interfaz inexistente"
@@ -211,7 +270,9 @@ class UsbHidBridge(private val context: Context) {
     }
 
     @JavascriptInterface
-    fun close() {
+    fun close() = onUsb { closeImpl() }
+
+    private fun closeImpl() {
         claimed?.let { connection?.releaseInterface(it) }
         connection?.close()
         connection = null
@@ -227,7 +288,10 @@ class UsbHidBridge(private val context: Context) {
 
     /** Escribe y espera respuesta. Devuelve el hexadecimal o "ERR:...". */
     @JavascriptInterface
-    fun transfer(hex: String, timeoutMs: Int): String {
+    fun transfer(hex: String, timeoutMs: Int): String =
+        onUsb { transferImpl(hex, timeoutMs) }
+
+    private fun transferImpl(hex: String, timeoutMs: Int): String {
         val conn = connection ?: return "ERR:sin conexion"
         val inEp = endpointIn ?: return "ERR:sin endpoint de entrada"
         val data = hexToBytes(hex, REPORT_SIZE) ?: return "ERR:datos invalidos"
@@ -247,7 +311,9 @@ class UsbHidBridge(private val context: Context) {
 
     /** Escribe sin esperar respuesta. */
     @JavascriptInterface
-    fun write(hex: String): String {
+    fun write(hex: String): String = onUsb { writeImpl(hex) }
+
+    private fun writeImpl(hex: String): String {
         val conn = connection ?: return "ERR:sin conexion"
         val data = hexToBytes(hex, REPORT_SIZE) ?: return "ERR:datos invalidos"
         val out = endpointOut
@@ -289,8 +355,11 @@ class UsbHidBridge(private val context: Context) {
      * sobre la interfaz propietaria.
      */
     @JavascriptInterface
-    fun diagnose(deviceId: Int, probeHex: String, timeoutMs: Int): String {
-        close()
+    fun diagnose(deviceId: Int, probeHex: String, timeoutMs: Int): String =
+        onUsb { diagnoseImpl(deviceId, probeHex, timeoutMs) }
+
+    private fun diagnoseImpl(deviceId: Int, probeHex: String, timeoutMs: Int): String {
+        closeImpl()
         val out = JSONObject()
         val device = findDevice(deviceId)
             ?: return out.put("error", "dispositivo no encontrado").toString()
