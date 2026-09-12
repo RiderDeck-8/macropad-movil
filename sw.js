@@ -1,7 +1,7 @@
 // Estrategia: la red manda y la cache es el respaldo, salvo los datos de
 // dispositivo (layouts, catalogos) que no cambian y se sirven desde cache.
 // Asi la app funciona sin red pero nunca se queda con una version vieja.
-const CACHE = 'macropad-v11';
+const CACHE = 'macropad-v12';
 const SHELL = [
   './', './index.html', './styles.css', './icon.svg', './manifest.webmanifest',
   './js/app.js', './js/hid.js', './js/protocol.js', './js/catalog.js',

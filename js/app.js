@@ -214,7 +214,13 @@ async function connect() {
     if (DEMO) {
       state.transport = await new DemoTransport().open();
     } else if (androidShell()) {
-      state.transport = await connectAndroid((msg) => log(msg));
+      try {
+        state.transport = await connectAndroid((msg) => log(msg));
+      } catch (err) {
+        // El mensaje lleva formato y pasos; el aviso corto se queda corto.
+        log(err.message, true);
+        return;
+      }
     } else {
       device = (await HID.knownDevices())[0];
       try {

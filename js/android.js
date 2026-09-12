@@ -198,6 +198,24 @@ export function diagnose() {
   return out;
 }
 
+// Algunos telefonos gamer interceptan teclados y ratones USB para mapearlos a
+// controles en pantalla. Cuando lo hacen, el sistema entrega un dispositivo
+// abierto pero no deja pasar ninguna transferencia.
+const BLOCKED =
+  'El sistema del telefono no deja pasar trafico USB a este teclado.<br><br>' +
+  'Suele ser la capa de perifericos para juegos, que se queda con los teclados ' +
+  'y ratones al enchufarlos. En RedMagic se llama <b>Gravity X</b>.<br><br>' +
+  '<ol class="steps tight">' +
+  '<li>Cierra con la <b>X</b> la tarjeta que sale al enchufar el teclado.</li>' +
+  '<li>Busca sus ajustes en <b>Ajustes</b> o en el espacio de juego, y ' +
+  'desactiva el mapeo o la deteccion de perifericos.</li>' +
+  '<li>Si no aparece, en <b>Ajustes, Aplicaciones</b>, mostrando las del ' +
+  'sistema, forzala a detenerse o desactivala.</li>' +
+  '<li>Desenchufa y vuelve a enchufar el teclado, y prueba otra vez.</li>' +
+  '</ol>' +
+  'Tambien vale la pena probar con un concentrador USB en medio: a veces la ' +
+  'capa de juegos solo se queda con lo que se enchufa directo.';
+
 /**
  * Busca el teclado, pide permiso y devuelve un transporte listo.
  * `report` recibe mensajes para mostrar en pantalla.
@@ -217,6 +235,15 @@ export async function connectAndroid(report = () => {}) {
   const ordered = [...devices].sort((a, b) => Number(isKnown(b)) - Number(isKnown(a)));
   const errors = [];
 
+  // Antes de nada, comprobar que el canal USB deja pasar trafico. Si no, no se
+  // insiste: cada intento de tomar interfaces molesta al teclado.
+  for (const device of ordered) {
+    if (!device.hasPermission) continue;
+    const health = window.AndroidHid.health(device.id);
+    if (health) throw new Error(BLOCKED);
+    break;
+  }
+
   for (const device of ordered) {
     const label = `${device.name} (${device.vendorId.toString(16)}:${device.productId.toString(16)})`;
     report(`Probando ${label}...`);
@@ -233,6 +260,7 @@ export async function connectAndroid(report = () => {}) {
     if (transport) return transport;
     errors.push(`${label}: ninguna interfaz contesto`);
   }
+  try { window.AndroidHid.close(); } catch { /* ya cerrado */ }
   throw new Error(
     errors.join('. ') +
     '. Pulsa Diagnostico USB para ver que contesta cada interfaz.'

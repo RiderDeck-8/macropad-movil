@@ -153,6 +153,29 @@ class UsbHidBridge(private val context: Context) {
         return false
     }
 
+    /**
+     * Comprueba si por el canal pasa trafico, con una peticion estandar y sin
+     * reclamar ninguna interfaz. Si esto falla no tiene sentido insistir: cada
+     * intento de tomar interfaces molesta al teclado y puede tumbarlo.
+     */
+    @JavascriptInterface
+    fun health(deviceId: Int): String {
+        close()
+        val device = findDevice(deviceId) ?: return "ERR:dispositivo no encontrado"
+        if (!manager.hasPermission(device)) return "ERR:sin permiso de Android"
+        val conn = manager.openDevice(device) ?: return "ERR:no se pudo abrir el dispositivo"
+        return try {
+            val probe = ByteArray(18)
+            val n = conn.controlTransfer(
+                DEVICE_IN_REQUEST_TYPE, GET_DESCRIPTOR, DESCRIPTOR_DEVICE, 0,
+                probe, probe.size, 2000
+            )
+            if (n > 0) "" else "ERR:el sistema no deja pasar trafico USB"
+        } finally {
+            conn.close()
+        }
+    }
+
     // -------------------------------------------------------------- conexion
 
     @JavascriptInterface
