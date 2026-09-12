@@ -333,7 +333,8 @@ function runDeep() {
         lines.push(`&nbsp;&nbsp;setInterface: ${i.setInterface}`);
       }
       if (i.control) lines.push(`&nbsp;&nbsp;control: ${i.control}`);
-      if (i.escucha) lines.push(`&nbsp;&nbsp;<b>escucha: ${i.escucha}</b>`);
+      if (i.escuchaBulk) lines.push(`&nbsp;&nbsp;<b>escucha bulk: ${i.escuchaBulk}</b>`);
+      if (i.escuchaRequest) lines.push(`&nbsp;&nbsp;<b>escucha req: ${i.escuchaRequest}</b>`);
       if (i.escrito !== undefined) lines.push(`&nbsp;&nbsp;escrito: ${i.escrito}`);
       if (i.respuesta) lines.push(`&nbsp;&nbsp;respuesta: ${i.respuesta}`);
     }

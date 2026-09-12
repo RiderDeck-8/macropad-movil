@@ -96,7 +96,21 @@ class UsbHidBridge(private val context: Context) {
         Thread(r, "usb-hid").apply { isDaemon = true }
     }
 
-    private fun <T> onUsb(block: () -> T): T = usbExec.submit(Callable { block() }).get()
+    /**
+     * Ejecuta en el hilo USB y nunca deja escapar una excepcion: si una salta
+     * dentro de un metodo llamado desde JavaScript, WebView tumba la app
+     * entera. Mejor devolver un error legible.
+     */
+    private fun onUsb(block: () -> String): String = try {
+        usbExec.submit(Callable { block() }).get()
+    } catch (e: Exception) {
+        val cause = e.cause ?: e
+        "ERR:${cause.javaClass.simpleName} ${cause.message ?: ""}".trim()
+    }
+
+    private fun onUsbUnit(block: () -> Unit) {
+        runCatching { usbExec.submit(Callable { block() }).get() }
+    }
 
     fun register() {
         val filter = IntentFilter(ACTION_PERMISSION)
@@ -117,7 +131,13 @@ class UsbHidBridge(private val context: Context) {
     // ------------------------------------------------------------- enumeracion
 
     @JavascriptInterface
-    fun devices(): String {
+    fun devices(): String = try {
+        devicesImpl()
+    } catch (e: Exception) {
+        JSONArray().toString()
+    }
+
+    private fun devicesImpl(): String {
         val out = JSONArray()
         for (device in manager.deviceList.values) {
             // Solo las interfaces propietarias: las del teclado las usa Android
@@ -152,7 +172,13 @@ class UsbHidBridge(private val context: Context) {
     }
 
     @JavascriptInterface
-    fun requestPermission(deviceId: Int): Boolean {
+    fun requestPermission(deviceId: Int): Boolean = try {
+        requestPermissionImpl(deviceId)
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun requestPermissionImpl(deviceId: Int): Boolean {
         val device = findDevice(deviceId) ?: return false
         if (manager.hasPermission(device)) return true
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -213,7 +239,13 @@ class UsbHidBridge(private val context: Context) {
      * ejecuta, no el USB.
      */
     @JavascriptInterface
-    fun threadTest(deviceId: Int): String {
+    fun threadTest(deviceId: Int): String = try {
+        threadTestImpl(deviceId)
+    } catch (e: Exception) {
+        JSONObject().put("error", e.javaClass.simpleName).toString()
+    }
+
+    private fun threadTestImpl(deviceId: Int): String {
         close()
         val out = JSONObject()
         val device = findDevice(deviceId)
@@ -317,8 +349,10 @@ class UsbHidBridge(private val context: Context) {
                     if (n > 0) "ok" else "fallo $n en ${System.currentTimeMillis() - started}ms"
                 )
 
-                // 1. Escuchar sin escribir nada.
-                entry.put("escucha", readRaw(conn, inEp, listenMs))
+                // 1. Escuchar sin escribir nada, con los dos mecanismos de
+                //    lectura: el sincrono y el asincrono del kernel.
+                entry.put("escuchaBulk", readRaw(conn, inEp, listenMs))
+                entry.put("escuchaRequest", readRequestRaw(conn, inEp, listenMs))
 
                 // 2. Escribir la sonda y volver a escuchar.
                 val outEp = firstEndpoint(iface, UsbConstants.USB_DIR_OUT)
@@ -344,6 +378,27 @@ class UsbHidBridge(private val context: Context) {
         }
         out.put("interfaces", results)
         return out.toString()
+    }
+
+    /** Lo mismo pero por la via asincrona del kernel, que es otra ruta. */
+    private fun readRequestRaw(
+        conn: UsbDeviceConnection, ep: UsbEndpoint, timeoutMs: Int
+    ): String {
+        val size = maxOf(ep.maxPacketSize, REPORT_SIZE)
+        val request = UsbRequest()
+        val started = System.currentTimeMillis()
+        return try {
+            if (!request.initialize(conn, ep)) return "no inicializa"
+            val buffer = ByteBuffer.allocateDirect(size)
+            if (!request.queue(buffer)) return "no encola"
+            val hex = awaitRequest(conn, request, buffer, timeoutMs)
+            val took = System.currentTimeMillis() - started
+            if (hex.isEmpty()) "nada en ${took}ms" else "$hex (${took}ms)"
+        } catch (e: Exception) {
+            "excepcion ${e.javaClass.simpleName}"
+        } finally {
+            runCatching { request.close() }
+        }
     }
 
     /**
@@ -406,7 +461,7 @@ class UsbHidBridge(private val context: Context) {
     }
 
     @JavascriptInterface
-    fun close() = onUsb { closeImpl() }
+    fun close() = onUsbUnit { closeImpl() }
 
     private fun closeImpl() {
         claimed?.let { connection?.releaseInterface(it) }
@@ -418,7 +473,7 @@ class UsbHidBridge(private val context: Context) {
     }
 
     @JavascriptInterface
-    fun isOpen(): Boolean = connection != null
+    fun isOpen(): Boolean = runCatching { connection != null }.getOrDefault(false)
 
     // ------------------------------------------------------------ transferencia
 
