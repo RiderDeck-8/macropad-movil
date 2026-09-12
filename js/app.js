@@ -3,6 +3,7 @@ import { Keyboard, KeyType } from './protocol.js';
 import * as Cat from './catalog.js';
 import * as Mac from './macros.js';
 import { DemoTransport } from './demo.js';
+import { androidShell, connectAndroid } from './android.js';
 
 const $ = (id) => document.getElementById(id);
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -85,6 +86,16 @@ function checkSupport() {
       'puedes recorrer toda la interfaz sin conectar nada. Quita <code>?demo=1</code> ' +
       'de la direccion para usar el teclado real.';
     $('welcomeActions').hidden = true;
+    return true;
+  }
+  if (androidShell()) {
+    note.className = 'note';
+    note.innerHTML =
+      '<b>Aplicacion de Android.</b> Aqui el acceso USB lo hace la propia app, ' +
+      'sin depender de WebHID ni de la version de Chrome.<br><br>' +
+      'Enchufa el teclado por USB-C (OTG), pulsa Conectar y acepta el permiso ' +
+      'que pide Android.';
+    $('btnAnyDevice').hidden = true;
     return true;
   }
   $('btnAnyDevice').hidden = !HID.hidSupported();
@@ -201,6 +212,8 @@ async function connect() {
     let device = null;
     if (DEMO) {
       state.transport = await new DemoTransport().open();
+    } else if (androidShell()) {
+      state.transport = await connectAndroid((msg) => log(msg));
     } else {
       device = (await HID.knownDevices())[0];
       try {

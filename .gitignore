@@ -4,3 +4,8 @@ Thumbs.db
 .netlify/
 node_modules/
 .claude/
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+*.apk

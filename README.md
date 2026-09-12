@@ -8,12 +8,46 @@ reasignar teclas, colores por tecla, efectos de luz, macros, perfiles y capas.
 
 Es un sitio estático: HTML, CSS y JavaScript sin dependencias ni compilación.
 
+Viene en dos formas, con la misma interfaz:
+
+- **Web**, que funciona en el navegador de un ordenador desde hoy.
+- **Aplicación de Android**, en la carpeta `android/`, que hace el acceso USB
+  por su cuenta y no depende de la versión de Chrome. Es la que hay que usar en
+  el teléfono.
+
 ---
 
-## Qué necesitas para que funcione en Android
+## Aplicación de Android
 
-El navegador sólo puede hablar con el teclado a través de **WebHID**, y en
-Android esa API es muy reciente:
+Chrome para Android todavía no expone por WebHID los teclados que el sistema ya
+está usando como teclado. La aplicación esquiva eso: usa la API USB de Android,
+que sí puede reclamar la interfaz con `claimInterface(forceClaim = true)`,
+apartando temporalmente al controlador del sistema.
+
+Por dentro es una carcasa mínima. Un `WebView` muestra exactamente la misma web
+de este repositorio, servida desde los assets, y un puente en Kotlin le da el
+acceso USB. La interfaz, el protocolo y los layouts son los mismos archivos: al
+compilar se copian, así que web y app nunca se desincronizan.
+
+**Cómo conseguir el APK sin instalar nada.** Cada cambio en `main` dispara el
+flujo *APK de Android* en GitHub Actions. Entra en la pestaña **Actions** del
+repositorio, abre la última ejecución en verde y descarga el artefacto
+`macropad-movil-apk`. Dentro está el APK.
+
+Es una compilación de depuración, firmada con la clave de depuración, así que
+Android pedirá permiso para instalar desde esa fuente. Al enchufar el teclado,
+la app pide el permiso USB del sistema: hay que aceptarlo.
+
+Para compilarlo en local hace falta el SDK de Android y `gradle assembleDebug`
+dentro de `android/`.
+
+---
+
+## Qué necesitas para que funcione en Android desde el navegador
+
+Esto aplica sólo si quieres usar la web en el móvil en vez de la aplicación. El
+navegador sólo puede hablar con el teclado a través de **WebHID**, y en Android
+esa API es muy reciente:
 
 | Plataforma | Estado |
 |---|---|

@@ -1,0 +1,50 @@
+name: APK de Android
+
+# Compila la aplicacion y deja el APK listo para descargar desde la pestana
+# Actions. No hace falta Android Studio en el ordenador.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'js/**'
+      - 'data/**'
+      - 'index.html'
+      - 'styles.css'
+      - 'manifest.webmanifest'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compilar APK de depuracion
+        run: gradle --project-dir android assembleDebug --no-daemon --stacktrace
+
+      - name: Renombrar
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "out/macropad-movil-${GITHUB_SHA::7}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macropad-movil-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 90

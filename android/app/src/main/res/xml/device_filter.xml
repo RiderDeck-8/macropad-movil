@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vendor IDs que usan estos teclados macro. Solo sirve para que Android
+     ofrezca abrir la app al enchufar uno; la app ve cualquier dispositivo. -->
+<resources>
+    <usb-device vendor-id="1121" />  <!-- 0x0461 -->
+    <usb-device vendor-id="1155" />  <!-- 0x0483 -->
+    <usb-device vendor-id="1452" />  <!-- 0x05ac -->
+    <usb-device vendor-id="2070" />  <!-- 0x0816 -->
+    <usb-device vendor-id="2071" />  <!-- 0x0817 -->
+    <usb-device vendor-id="2072" />  <!-- 0x0818 -->
+    <usb-device vendor-id="2073" />  <!-- 0x0819 -->
+    <usb-device vendor-id="2209" />  <!-- 0x08a1 -->
+    <usb-device vendor-id="2211" />  <!-- 0x08a3 -->
+    <usb-device vendor-id="2213" />  <!-- 0x08a5 -->
+    <usb-device vendor-id="2222" />  <!-- 0x08ae -->
+    <usb-device vendor-id="12625" />  <!-- 0x3151 -->
+    <usb-device vendor-id="13742" />  <!-- 0x35ae -->
+    <usb-device vendor-id="13998" />  <!-- 0x36ae -->
+    <usb-device vendor-id="21862" />  <!-- 0x5566 -->
+    <usb-device vendor-id="26813" />  <!-- 0x68bd -->
+    <usb-device vendor-id="27906" />  <!-- 0x6d02 -->
+    <usb-device vendor-id="27907" />  <!-- 0x6d03 -->
+    <usb-device vendor-id="27908" />  <!-- 0x6d04 -->
+    <usb-device vendor-id="27909" />  <!-- 0x6d05 -->
+    <usb-device vendor-id="27910" />  <!-- 0x6d06 -->
+    <usb-device vendor-id="27911" />  <!-- 0x6d07 -->
+    <usb-device vendor-id="28027" />  <!-- 0x6d7b -->
+    <usb-device vendor-id="28028" />  <!-- 0x6d7c -->
+    <usb-device vendor-id="28029" />  <!-- 0x6d7d -->
+    <usb-device vendor-id="28030" />  <!-- 0x6d7e -->
+    <usb-device vendor-id="28031" />  <!-- 0x6d7f -->
+    <usb-device vendor-id="28032" />  <!-- 0x6d80 -->
+    <usb-device vendor-id="28033" />  <!-- 0x6d81 -->
+    <usb-device vendor-id="28034" />  <!-- 0x6d82 -->
+    <usb-device vendor-id="28035" />  <!-- 0x6d83 -->
+    <usb-device vendor-id="32250" />  <!-- 0x7dfa -->
+</resources>
