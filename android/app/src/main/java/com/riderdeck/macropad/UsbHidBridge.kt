@@ -448,8 +448,13 @@ class UsbHidBridge(private val context: Context) {
         }
 
         // Reactiva los endpoints, que pueden haber quedado deshabilitados al
-        // desenganchar el controlador del sistema.
-        runCatching { conn.setInterface(iface) }
+        // desenganchar el controlador del sistema. Si no prospera, se reintenta
+        // tras volver a reclamar: es la unica forma de rehabilitarlos.
+        if (!runCatching { conn.setInterface(iface) }.getOrDefault(false)) {
+            runCatching { conn.releaseInterface(iface) }
+            runCatching { conn.claimInterface(iface, true) }
+            runCatching { conn.setInterface(iface) }
+        }
 
         connection = conn
         claimed = iface

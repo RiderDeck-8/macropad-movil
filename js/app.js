@@ -97,7 +97,6 @@ function checkSupport() {
       'que pide Android.';
     $('btnAnyDevice').hidden = true;
     $('btnUsbDiag').hidden = false;
-    $('btnDeep').hidden = false;
     return true;
   }
   $('btnAnyDevice').hidden = !HID.hidSupported();
@@ -315,77 +314,52 @@ async function scanAny() {
 }
 
 /**
- * Prueba a fondo. La clave es la linea "escucha": son los bytes que manda el
- * teclado por su cuenta al pulsar una tecla, sin que le pidamos nada.
+ * Un solo diagnostico que lo hace todo, en el orden util: primero escuchar el
+ * teclado mientras el usuario pulsa teclas, que es lo que distingue si el
+ * problema es de lectura o de protocolo, y despues el estado del canal.
  */
-function runDeep() {
+function runDiagnose() {
   log(
     '<b>Pulsa las teclas del macropad sin parar</b> y gira la rueda durante ' +
     'los proximos segundos. La pantalla se quedara quieta mientras escucha.'
   );
+  // Un respiro para que el aviso se pinte antes de bloquear el hilo.
   setTimeout(() => {
-    const r = deepTest(2500);
-    if (r.error) { log(r.error, true); return; }
-    const lines = [`<b>${r.device.name}</b>`];
-    for (const i of r.report.interfaces || []) {
-      lines.push(`if ${i.iface} · sub ${i.subclass} · toma ${i.claim || i.skip || i.error}`);
-      if (i.setInterface !== undefined) {
-        lines.push(`&nbsp;&nbsp;setInterface: ${i.setInterface}`);
+    const lines = [];
+    const hex = (n) => n.toString(16).padStart(4, '0');
+
+    const deep = deepTest(2500);
+    if (deep.error) {
+      lines.push(deep.error);
+    } else {
+      lines.push(`<b>${deep.device.name}</b> ` +
+        `${hex(deep.device.vendorId)}:${hex(deep.device.productId)}`);
+      for (const i of deep.report.interfaces || []) {
+        lines.push(`if ${i.iface} · sub ${i.subclass} · toma ${i.claim || i.skip || i.error}`);
+        if (i.setInterface !== undefined) {
+          lines.push(`&nbsp;&nbsp;setInterface: ${i.setInterface}`);
+        }
+        if (i.control) lines.push(`&nbsp;&nbsp;control: ${i.control}`);
+        if (i.escuchaBulk) lines.push(`&nbsp;&nbsp;<b>escucha bulk: ${i.escuchaBulk}</b>`);
+        if (i.escuchaRequest) lines.push(`&nbsp;&nbsp;<b>escucha req: ${i.escuchaRequest}</b>`);
+        if (i.escrito !== undefined) lines.push(`&nbsp;&nbsp;escrito: ${i.escrito}`);
+        if (i.respuesta) lines.push(`&nbsp;&nbsp;respuesta: ${i.respuesta}`);
       }
-      if (i.control) lines.push(`&nbsp;&nbsp;control: ${i.control}`);
-      if (i.escuchaBulk) lines.push(`&nbsp;&nbsp;<b>escucha bulk: ${i.escuchaBulk}</b>`);
-      if (i.escuchaRequest) lines.push(`&nbsp;&nbsp;<b>escucha req: ${i.escuchaRequest}</b>`);
-      if (i.escrito !== undefined) lines.push(`&nbsp;&nbsp;escrito: ${i.escrito}`);
-      if (i.respuesta) lines.push(`&nbsp;&nbsp;respuesta: ${i.respuesta}`);
+      if (deep.report.error) lines.push(deep.report.error);
     }
-    if (r.report.error) lines.push(r.report.error);
+
+    const result = diagnose();
+    if (!result.error) {
+      for (const { report } of result) {
+        if (report.error) { lines.push(report.error); continue; }
+        lines.push(`<br>${report.modelo} · Android ${report.android} · fd ${report.fd}`);
+        lines.push(`descriptor comun: ${report.control} · setConfig ${report.setConfig}`);
+      }
+    }
     log('<span class="diag">' + lines.join('<br>') + '</span>');
-  }, 1400);
+  }, 1500);
 }
 
-/** Vuelca en pantalla el estado del canal USB y lo que contesta el teclado. */
-function runDiagnose() {
-  log('Hablando con el teclado...');
-  setTimeout(() => {
-    const result = diagnose();
-    if (result.error) { log(result.error, true); return; }
-    const hex = (n) => n.toString(16).padStart(4, '0');
-    const lines = [];
-    for (const { device, report, threads } of result) {
-      lines.push(`<b>${device.name}</b> ${hex(device.vendorId)}:${hex(device.productId)}`);
-      if (threads) {
-        lines.push(
-          `hilos → puente: ${threads.puente || threads.error} · ` +
-          `propio: ${threads.hiloPropio || '-'} · nuevo: ${threads.hiloNuevo || '-'}`
-        );
-      }
-      if (report.error) { lines.push(report.error); continue; }
-      lines.push(
-        `${report.modelo} · Android ${report.android} · ` +
-        `fd ${report.fd} · serie ${report.serie || '-'}`
-      );
-      lines.push(
-        `descriptor comun: ${report.control}` +
-        (report.controlReintento ? ' (con reintento largo)' : '') +
-        ` · setConfig ${report.setConfig}`
-      );
-      for (const a of report.attempts || []) {
-        lines.push(`if ${a.iface} · toma ${a.claim}`);
-        if (a.controlTrasTomar) {
-          lines.push(`&nbsp;&nbsp;control tras tomar: ${a.controlTrasTomar}`);
-        }
-        if (a.reportDescriptor) {
-          lines.push(`&nbsp;&nbsp;descriptor de reporte: ${a.reportDescriptor}`);
-        }
-        for (const t of a.tries || []) {
-          lines.push(`&nbsp;&nbsp;${t.name}: ${t.reply}`);
-        }
-      }
-      if (report.raw) lines.push(`crudo: ${report.raw}`);
-    }
-    log('<span class="diag">' + lines.join('<br>') + '</span>');
-  }, 300);
-}
 
 function genericLayout() {
   const keys = [];
@@ -1032,7 +1006,6 @@ function wire() {
   $('connectBtn').onclick = connect;
   $('btnAnyDevice').onclick = scanAny;
   $('btnUsbDiag').onclick = runDiagnose;
-  $('btnDeep').onclick = runDeep;
   $('btnDemo').onclick = () => {
     location.search = '?demo=1';
   };

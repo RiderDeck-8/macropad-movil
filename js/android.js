@@ -260,14 +260,10 @@ export async function connectAndroid(report = () => {}) {
   const ordered = [...devices].sort((a, b) => Number(isKnown(b)) - Number(isKnown(a)));
   const errors = [];
 
-  // Antes de nada, comprobar que el canal USB deja pasar trafico. Si no, no se
-  // insiste: cada intento de tomar interfaces molesta al teclado.
-  for (const device of ordered) {
-    if (!device.hasPermission) continue;
-    const health = window.AndroidHid.health(device.id);
-    if (health) throw new Error(BLOCKED);
-    break;
-  }
+  // Aqui habia una comprobacion previa basada en una transferencia de control.
+  // Se quito: hay teclados que rechazan el control y hablan perfectamente por
+  // sus endpoints, asi que aquello abortaba la conexion antes de intentar lo
+  // que de verdad importa.
 
   for (const device of ordered) {
     const label = `${device.name} (${device.vendorId.toString(16)}:${device.productId.toString(16)})`;
@@ -288,6 +284,7 @@ export async function connectAndroid(report = () => {}) {
   try { window.AndroidHid.close(); } catch { /* ya cerrado */ }
   throw new Error(
     errors.join('. ') +
-    '. Pulsa Diagnostico USB para ver que contesta cada interfaz.'
+    '.<br><br>Pulsa <b>Diagnostico USB</b> y pulsa las teclas del macropad ' +
+    'mientras corre: esa prueba dice si el teclado nos llega a hablar.'
   );
 }
